@@ -1,0 +1,80 @@
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  (res) => res.data,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+    }
+    return Promise.reject(err)
+  }
+)
+
+export function login(username, password) {
+  return api.post('/auth/login', { username, password })
+}
+
+// 知识库
+export function uploadKnowledge(file, category = '') {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('category', category)
+  return api.post('/knowledge/upload', fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,
+  })
+}
+
+export function getKnowledgeList(params = {}) {
+  return api.get('/knowledge/list', { params })
+}
+
+export function getKnowledgeDetail(docId) {
+  return api.get(`/knowledge/${docId}`)
+}
+
+export function deleteKnowledge(docId) {
+  return api.delete(`/knowledge/${docId}`)
+}
+
+// 对话
+export function createSession(title = '新对话', mode = 'normal') {
+  return api.post('/chat/session/create', { title, mode })
+}
+
+export function getSessionList(params = {}) {
+  return api.get('/chat/session/list', { params })
+}
+
+export function deleteSession(sessionId) {
+  return api.delete(`/chat/session/${sessionId}`)
+}
+
+export function getMessageHistory(sessionId, params = {}) {
+  return api.get(`/chat/message/${sessionId}/history`, { params })
+}
+
+export function createChatWebSocket(sessionId) {
+  const token = localStorage.getItem('token')
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = location.host
+  return new WebSocket(`${protocol}//${host}/api/chat/ws/${sessionId}?token=${token}`)
+}
+
+export default api

@@ -1,0 +1,27 @@
+# 环境
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+
+# 依赖
+node_modules/
+
+# 数据
+data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 构建
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from .core.config import UPLOAD_DIR, CHROMA_PERSIST_DIR
+from .core.config import UPLOAD_DIR, CHROMA_PERSIST_DIR, BM25_INDEX_PATH
 from .core.logging_config import setup_logging
 from .api.auth import router as auth_router
 from .api.knowledge import router as knowledge_router
@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
+
+    from .services.bm25_store import init_bm25_store
+    init_bm25_store(BM25_INDEX_PATH)
+
     logger.info("PersonalAgent 启动完成")
     yield
     logger.info("PersonalAgent 关闭")

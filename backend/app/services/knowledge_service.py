@@ -25,6 +25,7 @@ from .file_parser import (
 )
 from .embedding import embed_texts
 from .vector_store import add_chunks, delete_by_doc_id
+from .bm25_store import rebuild_bm25_index
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ def _make_chunk_meta(doc: KnowledgeDoc, chunk_index: int, char_count: int, struc
         "summary": doc.summary,
         "file_type": doc.file_type,
         "structure": structure,
+        "user_id": doc.user_id,
     }
 
 
@@ -280,11 +282,19 @@ async def process_document(db: AsyncSession, doc: KnowledgeDoc):
                     "filename": doc.filename,
                     "summary": doc.summary,
                     "file_type": doc.file_type,
+                    "user_id": doc.user_id,
                 } for c in batch],
             )
 
+
         doc.status = "done"
         await db.commit()
+
+        # 重建 BM25 稀疏索引
+        try:
+            await rebuild_bm25_index(db)
+        except Exception as e:
+            logger.warning("BM25 索引重建失败: %s", e)
 
     except Exception as e:
         logger.exception("文档处理失败 %s: %s", doc.filename, e)
@@ -311,4 +321,11 @@ async def delete_document(db: AsyncSession, doc_id: str) -> bool:
 
     await db.delete(doc)
     await db.commit()
+
+    # 重建 BM25 稀疏索引
+    try:
+        await rebuild_bm25_index(db)
+    except Exception as e:
+        logger.warning("BM25 索引重建失败: %s", e)
+
     return True

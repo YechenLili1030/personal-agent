@@ -51,10 +51,13 @@ def delete_by_doc_id(doc_id: str):
         logger.warning("删除向量失败 (可能集合为空): %s", e)
 
 
-def query(embedding: list[float], top_k: int = 5) -> list[dict]:
-    """向量相似度检索"""
+def query(embedding: list[float], top_k: int = 5, user_id: str | None = None) -> list[dict]:
+    """向量相似度检索，可选按 user_id 过滤"""
     collection = get_collection()
-    results = collection.query(query_embeddings=[embedding], n_results=top_k)
+    kwargs = {"query_embeddings": [embedding], "n_results": top_k}
+    if user_id:
+        kwargs["where"] = {"user_id": user_id}
+    results = collection.query(**kwargs)
     if not results or not results["ids"] or not results["ids"][0]:
         return []
 

@@ -43,6 +43,12 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "40"))
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", str(BASE_DIR / "data" / "chroma"))
 CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "knowledge_base")
 
+# BM25 稀疏检索
+DENSE_RECALL_K = int(os.getenv("DENSE_RECALL_K", "20"))
+SPARSE_RECALL_K = int(os.getenv("SPARSE_RECALL_K", "20"))
+RRF_K = int(os.getenv("RRF_K", "60"))
+BM25_INDEX_PATH = os.getenv("BM25_INDEX_PATH", str(BASE_DIR / "data" / "bm25_index.json"))
+
 # 文件上传
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))  # 50MB

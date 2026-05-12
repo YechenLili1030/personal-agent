@@ -4,23 +4,25 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections import defaultdict
 from typing import AsyncGenerator
 from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sa_delete
 from tiktoken import encoding_for_model
 
-from ..core.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, CHAT_MODEL
+from ..core.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, CHAT_MODEL, DENSE_RECALL_K, SPARSE_RECALL_K, RRF_K
 from ..core.prompts import CHAT_SYSTEM_PROMPT, TITLE_PROMPT
 from ..models.chat import Session, Message
 from ..tools import ALL_TOOLS
 from .embedding import embed_single
 from .vector_store import query as vector_query
+from .bm25_store import get_bm25_store
 
 logger = logging.getLogger(__name__)
 
 CONTEXT_WINDOW = 20
-RAG_TOP_K = 5
+RAG_TOP_K = 20
 
 _enc = encoding_for_model("gpt-4")  # cl100k_base, 通用估算
 
@@ -121,9 +123,33 @@ async def save_message(db: AsyncSession, session_id: str, role: str, content: st
     return msg
 
 
+# ═══════════════════════ RRF 融合 ═══════════════════════
+
+def _rrf_merge(dense_results: list[dict], sparse_results: list[dict],
+               k: int = RRF_K, top_k: int = RAG_TOP_K) -> list[dict]:
+    """使用 Reciprocal Rank Fusion 合并稠密和稀疏两路检索结果"""
+    lookup: dict[str, dict] = {}
+    rrf_scores: dict[str, float] = defaultdict(float)
+
+    for rank, r in enumerate(dense_results):
+        cid = r["chunk_id"]
+        lookup[cid] = r
+        rrf_scores[cid] += 1.0 / (k + rank + 1)
+
+    for rank, r in enumerate(sparse_results):
+        cid = r["chunk_id"]
+        if cid not in lookup:
+            lookup[cid] = r
+        rrf_scores[cid] += 1.0 / (k + rank + 1)
+
+    sorted_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)
+    return [lookup[cid] for cid in sorted_ids[:top_k]]
+
+
 # =========================== Context ===========================
 
-async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: str) -> tuple[list[dict], list[str]]:
+async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: str,
+                       user_id: str = "") -> tuple[list[dict], list[str]]:
     """将所有上下文打包到 system prompt，返回 messages + 来源文件名列表。"""
     history = await get_history(db, session_id, CONTEXT_WINDOW)
 
@@ -142,11 +168,29 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
     rag_section = "（无参考资料，使用自身知识回答）"
     sources: list[str] = []
     if mode == "rag":
+        # ── 稠密检索 (ChromaDB 向量) ──
+        dense_results: list[dict] = []
         try:
             query_emb = await embed_single(user_msg)
-            results = vector_query(query_emb, top_k=RAG_TOP_K)
-            logger.info("RAG 检索: query='%s' -> %d 条", user_msg[:60], len(results))
-            if results:
+            dense_results = vector_query(query_emb, top_k=DENSE_RECALL_K, user_id=user_id)
+            logger.info("稠密检索: query='%s' -> %d 条", user_msg[:60], len(dense_results))
+        except Exception as e:
+            logger.warning("稠密检索失败: %s", e)
+
+        # ── 稀疏检索 (BM25 关键词) ──
+        sparse_results: list[dict] = []
+        try:
+            bm25 = get_bm25_store()
+            sparse_results = bm25.search(user_msg, top_k=SPARSE_RECALL_K, user_id=user_id)
+            logger.info("稀疏检索: query='%s' -> %d 条", user_msg[:60], len(sparse_results))
+        except Exception as e:
+            logger.warning("稀疏检索失败: %s", e)
+
+        # ── RRF 融合 ──
+        results = _rrf_merge(dense_results, sparse_results)
+        logger.info("RRF 融合后: %d 条 (稠密=%d, 稀疏=%d)", len(results), len(dense_results), len(sparse_results))
+
+        if results:
                 docs: dict[str, dict] = {}
                 for r in results:
                     meta = r.get("metadata", {})
@@ -163,8 +207,6 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
                         header += f"\n摘要: {info['summary']}"
                     parts.append(header + "\n" + "\n---\n".join(info["chunks"]))
                 rag_section = "\n\n".join(parts)
-        except Exception as e:
-            logger.warning("RAG 检索失败: %s", e)
 
     # ━━━ 组装 ━━━
     system_content = CHAT_SYSTEM_PROMPT.format(

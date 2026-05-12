@@ -153,7 +153,7 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                     await ws.send_json({"type": "title", "data": session.title})
 
                 # 构建上下文
-                messages, sources = await build_context(db, session_id, content, mode)
+                messages, sources = await build_context(db, session_id, content, mode, user.id)
 
                 # 流式回复
                 full_response = ""

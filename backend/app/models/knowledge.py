@@ -19,6 +19,7 @@ class KnowledgeDoc(Base):
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     file_path: Mapped[str | None] = mapped_column(String(1024), default=None)
     status: Mapped[str] = mapped_column(String(16), default="uploading")
+    inspect: Mapped[bool] = mapped_column(default=False)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     char_count: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[str | None] = mapped_column(Text, default=None)

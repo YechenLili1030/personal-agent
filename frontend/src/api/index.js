@@ -31,10 +31,11 @@ export function login(username, password) {
 }
 
 // 知识库
-export function uploadKnowledge(file, category = '') {
+export function uploadKnowledge(file, category = '', inspect = false) {
   const fd = new FormData()
   fd.append('file', file)
   fd.append('category', category)
+  fd.append('inspect', inspect ? 'true' : 'false')
   return api.post('/knowledge/upload', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 60000,
@@ -51,6 +52,26 @@ export function getKnowledgeDetail(docId) {
 
 export function deleteKnowledge(docId) {
   return api.delete(`/knowledge/${docId}`)
+}
+
+export function getDocChunks(docId) {
+  return api.get(`/knowledge/${docId}/chunks`)
+}
+
+export function deleteChunk(chunkId) {
+  return api.delete(`/knowledge/chunks/${chunkId}`)
+}
+
+export function mergeChunks(sourceChunkId, targetChunkId, selectedText = null) {
+  return api.put('/knowledge/chunks/merge', {
+    source_chunk_id: sourceChunkId,
+    target_chunk_id: targetChunkId,
+    selected_text: selectedText || null,
+  })
+}
+
+export function finalizeDocument(docId) {
+  return api.post(`/knowledge/${docId}/finalize`)
 }
 
 // 对话

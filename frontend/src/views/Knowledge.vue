@@ -1,49 +1,5 @@
 <template>
-  <div class="knowledge-layout">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="mini-chop" aria-hidden="true">
-          <svg viewBox="0 0 32 32" fill="none">
-            <rect x="1.5" y="1.5" width="29" height="29" rx="2" stroke="currentColor" stroke-width="2"/>
-            <text x="16" y="22" text-anchor="middle" fill="currentColor" font-size="13" font-weight="900" font-family="serif">智</text>
-          </svg>
-        </div>
-        <span class="sidebar-title">PersonalAgent</span>
-      </div>
-
-      <nav class="sidebar-nav">
-        <router-link to="/chat" class="nav-item">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-          对话
-        </router-link>
-        <router-link to="/knowledge" class="nav-item active">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          </svg>
-          知识库
-        </router-link>
-      </nav>
-
-      <div class="sidebar-footer">
-        <div class="user-row">
-          <div class="user-avatar">{{ userInitial }}</div>
-          <span class="user-name">{{ user?.nickname || user?.username }}</span>
-        </div>
-        <button class="logout-link" @click="handleLogout">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-            <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
-          </svg>
-        </button>
-      </div>
-    </aside>
-
-    <!-- Main -->
-    <main class="main-area">
-      <div class="knowledge-content">
+  <div class="knowledge-content">
         <!-- Header -->
         <header class="page-header">
           <div>
@@ -86,6 +42,11 @@
           <p class="upload-text" v-if="!uploading">拖拽文件到此处，或 <span class="upload-link">点击上传</span></p>
           <p class="upload-text" v-else>正在上传...</p>
           <p class="upload-hint">支持 PDF / Word / Excel / TXT / Markdown / 图片 (最大 50MB)</p>
+          <label class="inspect-toggle" @click.stop>
+            <input type="checkbox" v-model="inspectEnabled" :disabled="uploading" />
+            <span class="inspect-label">上传后检查分块</span>
+            <span class="inspect-hint">分块后暂停，可手动合并相邻分块以修复语义截断</span>
+          </label>
           <p v-if="uploadError" class="upload-error">{{ uploadError }}</p>
         </div>
 
@@ -105,6 +66,7 @@
             <option value="uploading">上传中</option>
             <option value="parsing">解析中</option>
             <option value="chunking">分块中</option>
+            <option value="inspecting">待审查</option>
             <option value="embedding">向量化中</option>
             <option value="done">已完成</option>
             <option value="failed">失败</option>
@@ -134,6 +96,13 @@
             </div>
             <div class="doc-actions">
               <span class="status-badge" :class="doc.status">{{ statusLabel(doc.status) }}</span>
+              <button
+                v-if="doc.status === 'inspecting'"
+                class="inspect-btn"
+                @click="openInspector(doc)"
+              >
+                审查分块
+              </button>
               <button class="delete-btn" @click="handleDelete(doc)" title="删除">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -160,38 +129,39 @@
           <span class="page-info">{{ page }} / {{ totalPages }}</span>
           <button :disabled="page >= totalPages" @click="goPage(page + 1)">&rarr;</button>
         </div>
-      </div>
-    </main>
-
-    <ConfirmModal
-      :visible="showDeleteModal"
-      title="删除文档"
-      :message="`确认删除「${deletingDoc?.filename || ''}」？相关的分块和向量数据将被清除，此操作不可撤销。`"
-      :loading="deletingLoading"
-      @confirm="confirmDelete"
-      @cancel="showDeleteModal = false"
-    />
   </div>
+
+  <ConfirmModal
+    :visible="showDeleteModal"
+    title="删除文档"
+    :message="`确认删除「${deletingDoc?.filename || ''}」？相关的分块和向量数据将被清除，此操作不可撤销。`"
+    :loading="deletingLoading"
+    @confirm="confirmDelete"
+    @cancel="showDeleteModal = false"
+  />
+
+  <ChunkInspectorModal
+    :visible="showInspector"
+    :docId="inspectingDoc?.doc_id || ''"
+    :docFilename="inspectingDoc?.filename || ''"
+    @close="showInspector = false"
+    @finalized="onInspectorFinalized"
+  />
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, computed } from 'vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
+import ChunkInspectorModal from '../components/ChunkInspectorModal.vue'
 import { getKnowledgeList, uploadKnowledge, deleteKnowledge } from '../api/index.js'
 
-const router = useRouter()
 const fileInput = ref(null)
-
-const user = computed(() => {
-  try { return JSON.parse(localStorage.getItem('user')) } catch { return null }
-})
-const userInitial = computed(() => (user.value?.nickname || user.value?.username || '?')[0])
 
 // Upload
 const dragOver = ref(false)
 const uploading = ref(false)
 const uploadError = ref('')
+const inspectEnabled = ref(false)
 
 // List
 const docs = ref([])
@@ -251,7 +221,7 @@ async function doUpload(file) {
   uploadError.value = ''
   uploading.value = true
   try {
-    const res = await uploadKnowledge(file)
+    const res = await uploadKnowledge(file, '', inspectEnabled.value)
     if (res.code === 0) {
       page.value = 1
       await fetchList()
@@ -292,6 +262,19 @@ async function confirmDelete() {
   }
 }
 
+// Inspector
+const showInspector = ref(false)
+const inspectingDoc = ref(null)
+
+function openInspector(doc) {
+  inspectingDoc.value = doc
+  showInspector.value = true
+}
+
+function onInspectorFinalized() {
+  fetchList()
+}
+
 // Format helpers
 function formatSize(bytes) {
   if (!bytes) return ''
@@ -307,129 +290,20 @@ function formatDate(iso) {
 }
 
 function statusLabel(s) {
-  const map = { uploading: '上传中', parsing: '解析中', chunking: '分块中', embedding: '向量化', done: '已完成', failed: '失败' }
+  const map = { uploading: '上传中', parsing: '解析中', chunking: '分块中', inspecting: '待审查', embedding: '向量化', done: '已完成', failed: '失败' }
   return map[s] || s
 }
 
-function handleLogout() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-  router.push('/login')
-}
 </script>
 
 <style scoped>
-.knowledge-layout {
-  display: flex;
-  height: 100vh;
-  background: var(--paper);
-}
-
-/* ============================
-   Sidebar (same as Chat)
-   ============================ */
-.sidebar {
-  width: 272px;
-  background: var(--ink-deep);
-  color: var(--paper-warm);
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  border-right: 1px solid rgba(255,255,255,0.04);
-}
-
-.sidebar-header {
-  padding: 22px 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-
-.mini-chop {
-  color: var(--vermillion);
-  width: 28px;
-  flex-shrink: 0;
-}
-
-.sidebar-title {
-  font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--paper);
-}
-
-.sidebar-nav {
-  padding: 12px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  color: var(--stone-light);
-  text-decoration: none;
-  font-size: 14px;
-  letter-spacing: 0.04em;
-  transition: all 0.2s;
-}
-
-.nav-item:hover {
-  background: rgba(255,255,255,0.05);
-  color: var(--paper);
-}
-
-.nav-item.active {
-  background: rgba(255,255,255,0.08);
-  color: var(--paper);
-}
-
-.sidebar-footer {
-  padding: 14px 20px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: auto;
-}
-
-.user-row { display: flex; align-items: center; gap: 10px; }
-
-.user-avatar {
-  width: 30px; height: 30px; border-radius: 2px;
-  background: var(--vermillion); color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 700; font-family: var(--font-display);
-}
-.user-name { font-size: 13px; color: var(--stone-light); letter-spacing: 0.04em; }
-
-.logout-link {
-  background: none; border: none; color: var(--stone);
-  cursor: pointer; padding: 4px; border-radius: 3px;
-  transition: color 0.2s; display: flex;
-}
-.logout-link:hover { color: var(--vermillion); }
-
-/* ============================
-   Main area
-   ============================ */
-.main-area {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  justify-content: center;
-}
-
 .knowledge-content {
   width: 100%;
   max-width: 860px;
+  margin: 0 auto;
   padding: 40px 36px 60px;
+  overflow-y: auto;
+  height: 100%;
 }
 
 /* Header */
@@ -596,6 +470,29 @@ function handleLogout() {
 .status-badge.embedding { background: #fdf6e3; color: #b8944b; }
 .status-badge.done { background: #e8efe9; color: #3d5648; }
 .status-badge.failed { background: #fef0ef; color: #c13227; }
+.status-badge.inspecting { background: #eef2f8; color: #2b5797; }
+
+.inspect-btn {
+  padding: 5px 14px; border-radius: 3px;
+  border: 1px solid #2b5797;
+  background: transparent; color: #2b5797;
+  font-size: 12px; font-family: var(--font-body); cursor: pointer;
+  transition: all 0.2s; white-space: nowrap;
+}
+.inspect-btn:hover { background: #f0f4fa; }
+
+.inspect-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 12px; cursor: pointer; font-size: 13px;
+  color: var(--ink-black);
+}
+.inspect-toggle input[type="checkbox"] {
+  accent-color: var(--vermillion);
+  width: 15px; height: 15px;
+}
+.inspect-toggle input[type="checkbox"]:disabled { opacity: 0.4; }
+.inspect-label { font-weight: 500; }
+.inspect-hint { font-size: 11px; color: var(--stone-light); }
 
 .delete-btn {
   background: none; border: none;
@@ -636,10 +533,6 @@ function handleLogout() {
 .page-info { font-size: 13px; color: var(--stone); }
 
 @media (max-width: 640px) {
-  .sidebar { width: 64px; }
-  .sidebar-title, .user-name, .nav-item span { display: none; }
-  .nav-item { justify-content: center; padding: 10px; }
-  .sidebar-header { justify-content: center; }
   .knowledge-content { padding: 24px 16px 40px; }
   .page-header { flex-direction: column; gap: 12px; }
   .doc-meta { gap: 8px; }

@@ -32,7 +32,7 @@ class BM25Store:
     @staticmethod
     def tokenize(text: str) -> list[str]:
         """jieba 分词，过滤空白和单字 token"""
-        tokens = jieba.lcut(text)
+        tokens = list(jieba.cut(text))
         result = []
         for t in tokens:
             t = t.strip().lower()

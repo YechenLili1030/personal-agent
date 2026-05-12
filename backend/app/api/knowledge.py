@@ -7,10 +7,14 @@ from sqlalchemy import select, func
 
 from ..core.database import get_db
 from ..core.config import MAX_UPLOAD_SIZE
-from ..models.knowledge import KnowledgeDoc
+from ..models.knowledge import KnowledgeDoc, DocChunk
 from ..models.user import User
+from ..schemas.knowledge import MergeRequest
 from ..services.file_parser import allowed_file, get_file_type
-from ..services.knowledge_service import save_upload, process_document, delete_document
+from ..services.knowledge_service import (
+    save_upload, process_document, delete_document,
+    merge_chunks, delete_chunk, finalize_document,
+)
 from .deps import require_user
 
 logger = logging.getLogger(__name__)
@@ -21,6 +25,7 @@ router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 async def upload_file(
     file: UploadFile = File(...),
     category: str = Form(""),
+    inspect: bool = Form(False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_user),
 ):
@@ -43,6 +48,7 @@ async def upload_file(
         file_size=len(content),
         file_path=file_path,
         status="uploading",
+        inspect=inspect,
         category=category or None,
     )
     db.add(doc)
@@ -121,6 +127,54 @@ async def list_docs(
     }
 
 
+@router.put("/chunks/merge")
+async def merge_chunks_endpoint(
+    req: MergeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    try:
+        chunks = await merge_chunks(db, req.source_chunk_id, req.target_chunk_id, req.selected_text)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+
+    return {
+        "code": 0,
+        "data": {
+            "chunks": [{
+                "chunk_id": c.id,
+                "chunk_index": c.chunk_index,
+                "content": c.content,
+                "char_count": c.char_count,
+            } for c in chunks],
+        },
+    }
+
+
+@router.delete("/chunks/{chunk_id}")
+async def delete_chunk_endpoint(
+    chunk_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    try:
+        chunks = await delete_chunk(db, chunk_id)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+
+    return {
+        "code": 0,
+        "data": {
+            "chunks": [{
+                "chunk_id": c.id,
+                "chunk_index": c.chunk_index,
+                "content": c.content,
+                "char_count": c.char_count,
+            } for c in chunks],
+        },
+    }
+
+
 @router.get("/{doc_id}")
 async def get_doc(doc_id: str, db: AsyncSession = Depends(get_db)):
     doc = await db.get(KnowledgeDoc, doc_id)
@@ -142,6 +196,61 @@ async def get_doc(doc_id: str, db: AsyncSession = Depends(get_db)):
             "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
         },
     }
+
+
+@router.get("/{doc_id}/chunks")
+async def get_doc_chunks(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    doc = await db.get(KnowledgeDoc, doc_id)
+    if not doc:
+        raise HTTPException(404, detail="文档不存在")
+    if doc.status != "inspecting":
+        raise HTTPException(400, detail="文档不在审查状态")
+
+    chunks = (await db.execute(
+        select(DocChunk)
+        .where(DocChunk.doc_id == doc_id)
+        .order_by(DocChunk.chunk_index)
+    )).scalars().all()
+
+    return {
+        "code": 0,
+        "data": {
+            "chunks": [{
+                "chunk_id": c.id,
+                "chunk_index": c.chunk_index,
+                "content": c.content,
+                "char_count": c.char_count,
+            } for c in chunks],
+        },
+    }
+
+
+@router.post("/{doc_id}/finalize")
+async def finalize_doc(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    doc = await db.get(KnowledgeDoc, doc_id)
+    if not doc:
+        raise HTTPException(404, detail="文档不存在")
+
+    try:
+        await finalize_document(db, doc)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    except Exception as e:
+        logger.exception("文档处理失败 %s: %s", doc.filename, e)
+        doc.status = "failed"
+        doc.error_msg = str(e)
+        await db.commit()
+        raise HTTPException(500, detail="向量化失败")
+
+    return {"code": 0, "data": {}, "message": "向量化完成"}
 
 
 @router.delete("/{doc_id}")

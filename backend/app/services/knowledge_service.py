@@ -264,43 +264,171 @@ async def process_document(db: AsyncSession, doc: KnowledgeDoc):
         doc.chunk_count = len(new_chunks)
         logger.info("文档 %s: %d chunks 入库 (去重跳过 %d)", doc.filename, len(new_chunks), skipped)
 
-        # 5. 向量化
-        doc.status = "embedding"
-        await db.commit()
+        # 5. 审查模式：暂停，等待用户确认
+        if doc.inspect:
+            doc.status = "inspecting"
+            await db.commit()
+            logger.info("文档 %s: 进入审查模式，等待用户确认", doc.filename)
+            return
 
-        for batch_start in range(0, len(new_chunks), BATCH_SIZE):
-            batch = new_chunks[batch_start:batch_start + BATCH_SIZE]
-            texts = [c.content for c in batch]
-            embeddings = await embed_texts(texts)
-            add_chunks(
-                chunk_ids=[c.id for c in batch],
-                texts=texts,
-                embeddings=embeddings,
-                metadatas=[{
-                    "doc_id": doc.id,
-                    "chunk_index": c.chunk_index,
-                    "filename": doc.filename,
-                    "summary": doc.summary,
-                    "file_type": doc.file_type,
-                    "user_id": doc.user_id,
-                } for c in batch],
-            )
-
-
-        doc.status = "done"
-        await db.commit()
-
-        # 重建 BM25 稀疏索引
-        try:
-            await rebuild_bm25_index(db)
-        except Exception as e:
-            logger.warning("BM25 索引重建失败: %s", e)
+        await _embed_and_finalize(db, doc, new_chunks)
 
     except Exception as e:
         logger.exception("文档处理失败 %s: %s", doc.filename, e)
         doc.status = "failed"
         doc.error_msg = str(e)
         await db.commit()
+
+
+async def _embed_and_finalize(db: AsyncSession, doc: KnowledgeDoc, chunks: list[DocChunk] | None = None):
+    """向量化 + 完成。chunks 为 None 时从 DB 重新读取（审查合并后的情况）"""
+    doc.status = "embedding"
+    await db.commit()
+
+    if chunks is None:
+        chunks = (await db.execute(
+            select(DocChunk).where(DocChunk.doc_id == doc.id).order_by(DocChunk.chunk_index)
+        )).scalars().all()
+
+    if not chunks:
+        raise ValueError("没有找到要嵌入的分块")
+
+    for batch_start in range(0, len(chunks), BATCH_SIZE):
+        batch = chunks[batch_start:batch_start + BATCH_SIZE]
+        texts = [c.content for c in batch]
+        embeddings = await embed_texts(texts)
+        add_chunks(
+            chunk_ids=[c.id for c in batch],
+            texts=texts,
+            embeddings=embeddings,
+            metadatas=[{
+                "doc_id": doc.id,
+                "chunk_index": c.chunk_index,
+                "filename": doc.filename,
+                "summary": doc.summary,
+                "file_type": doc.file_type,
+                "user_id": doc.user_id,
+            } for c in batch],
+        )
+
+    doc.status = "done"
+    doc.chunk_count = len(chunks)
+    await db.commit()
+
+    try:
+        await rebuild_bm25_index(db)
+    except Exception as e:
+        logger.warning("BM25 索引重建失败: %s", e)
+
+
+async def finalize_document(db: AsyncSession, doc: KnowledgeDoc):
+    """审查通过后继续向量化"""
+    if doc.status != "inspecting":
+        raise ValueError(f"文档状态为 '{doc.status}'，无法继续，需要 'inspecting' 状态")
+    await _embed_and_finalize(db, doc)
+
+
+async def delete_chunk(db: AsyncSession, chunk_id: str) -> list[DocChunk]:
+    """删除单个分块，重新编号剩余分块"""
+    chunk = await db.get(DocChunk, chunk_id)
+    if not chunk:
+        raise ValueError("分块不存在")
+
+    doc = await db.get(KnowledgeDoc, chunk.doc_id)
+    if doc.status != "inspecting":
+        raise ValueError("文档不在审查状态")
+
+    await db.delete(chunk)
+    await db.flush()
+
+    remaining = (await db.execute(
+        select(DocChunk)
+        .where(DocChunk.doc_id == doc.id)
+        .order_by(DocChunk.chunk_index)
+    )).scalars().all()
+
+    for i, c in enumerate(remaining):
+        c.chunk_index = i
+        if c.chunk_metadata:
+            c.chunk_metadata["chunk_index"] = i
+
+    await db.commit()
+    return remaining
+
+
+async def merge_chunks(
+    db: AsyncSession,
+    source_chunk_id: str,
+    target_chunk_id: str,
+    selected_text: str | None = None,
+) -> list[DocChunk]:
+    """将 source 块的全部或选中内容追加到 target 块。若 source 变空则删除。"""
+    source = await db.get(DocChunk, source_chunk_id)
+    target = await db.get(DocChunk, target_chunk_id)
+
+    if not source or not target:
+        raise ValueError("源分块或目标分块不存在")
+    if source.id == target.id:
+        raise ValueError("源分块和目标分块不能相同")
+    if source.doc_id != target.doc_id:
+        raise ValueError("分块不属于同一文档")
+
+    # 只能合并相邻分块
+    if abs(source.chunk_index - target.chunk_index) != 1:
+        raise ValueError("只能合并相邻分块")
+
+    doc = await db.get(KnowledgeDoc, source.doc_id)
+    if doc.status != "inspecting":
+        raise ValueError("文档不在审查状态")
+
+    # source 在上方 → 内容放到 target 顶部；source 在下方 → 放到 target 底部
+    source_above = source.chunk_index < target.chunk_index
+
+    is_partial = bool(selected_text and selected_text.strip())
+
+    if is_partial:
+        if selected_text not in source.content:
+            raise ValueError("选中的文本不在源分块中")
+        moved = selected_text.strip()
+        if source_above:
+            target.content = moved + "\n\n" + target.content.lstrip()
+        else:
+            target.content = target.content.rstrip() + "\n\n" + moved
+        target.char_count = len(target.content)
+        target.content_hash = _hash(target.content)
+        # 从 source 中移除选中文本
+        source.content = source.content.replace(selected_text, "", 1).strip()
+        source.char_count = len(source.content)
+        if source.content:
+            source.content_hash = _hash(source.content)
+        else:
+            await db.delete(source)
+            await db.flush()
+    else:
+        if source_above:
+            target.content = source.content.strip() + "\n\n" + target.content.lstrip()
+        else:
+            target.content = target.content.rstrip() + "\n\n" + source.content.strip()
+        target.char_count = len(target.content)
+        target.content_hash = _hash(target.content)
+        await db.delete(source)
+        await db.flush()
+
+    # 重新编号剩余分块
+    remaining = (await db.execute(
+        select(DocChunk)
+        .where(DocChunk.doc_id == doc.id)
+        .order_by(DocChunk.chunk_index)
+    )).scalars().all()
+
+    for i, c in enumerate(remaining):
+        c.chunk_index = i
+        if c.chunk_metadata:
+            c.chunk_metadata["chunk_index"] = i
+            c.chunk_metadata["char_count"] = c.char_count
+
+    await db.commit()
+    return remaining
 
 
 # =========================== 删除文档 ===========================

@@ -17,6 +17,7 @@ def build_mcp_servers_config() -> dict:
 
     if BAIDU_MAP_API_KEY:
         servers["baidu-map"] = {
+            "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@baidumap/mcp-server-baidu-map"],
             "env": {"BAIDU_MAP_API_KEY": BAIDU_MAP_API_KEY},

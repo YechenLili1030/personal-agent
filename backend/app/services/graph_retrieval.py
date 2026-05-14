@@ -60,9 +60,9 @@ def _extract_entities_jieba(chunks: list[dict]) -> list[str]:
 
     for c in chunks:
         text = c.get("content", "")
-        for word, flag in pseg.cut(text):
-            word = word.strip()
-            if len(word) >= 2 and flag in ENTITY_POS_TAGS:
+        for pair in pseg.cut(text):
+            word = pair.word.strip()
+            if len(word) >= 2 and pair.flag in ENTITY_POS_TAGS:
                 word_freq[word] += 1
 
     # 按频率排序，取 top-8

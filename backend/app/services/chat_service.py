@@ -233,11 +233,11 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
 # =========================== Streaming with Tools ===========================
 
 MAX_TOOL_ITERATIONS = 5
-TOOL_NAME_MAP = {t.name: t for t in ALL_TOOLS}
 
 
 async def run_chat_agent(messages: list[dict]) -> AsyncGenerator[str, None]:
     """带工具调用的流式对话，ReAct 循环自动处理多轮工具交互。"""
+    tool_map = {t.name: t for t in ALL_TOOLS}
     llm = _build_llm().bind_tools(ALL_TOOLS)
     t0 = time.time()
     total_input = 0
@@ -272,17 +272,18 @@ async def run_chat_agent(messages: list[dict]) -> AsyncGenerator[str, None]:
         tool_results = []
         for tc in tool_calls:
             name = tc["name"].strip()
-            fn = TOOL_NAME_MAP.get(name)
+            fn = tool_map.get(name)
             if not fn:
                 logger.warning("未知工具: %s", name)
                 continue
             try:
                 args = json.loads(tc["args"]) if tc["args"].strip() else {}
-                result = fn.invoke(args)
+                result = await fn.ainvoke(args)
                 tool_results.append(f"[工具: {name}]\n{result}")
                 logger.info("工具调用: %s(%s) → %s", name, args, str(result)[:120])
             except Exception as e:
                 logger.error("工具执行失败 %s: %s", name, e)
+                tool_results.append(f"[工具: {name}]\n执行失败: {e}")
 
         messages.append({"role": "assistant", "content": collected_content or " "})
         if tool_results:

@@ -24,6 +24,7 @@ class KnowledgeDoc(Base):
     char_count: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[str | None] = mapped_column(Text, default=None)
     category: Mapped[str | None] = mapped_column(String(128), default=None)
+    graph_status: Mapped[str | None] = mapped_column(String(16), default=None)  # building/built/failed
     error_msg: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

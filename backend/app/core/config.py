@@ -49,6 +49,15 @@ SPARSE_RECALL_K = int(os.getenv("SPARSE_RECALL_K", "20"))
 RRF_K = int(os.getenv("RRF_K", "60"))
 BM25_INDEX_PATH = os.getenv("BM25_INDEX_PATH", str(BASE_DIR / "data" / "bm25_index.json"))
 
+# Neo4j 知识图谱
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
+GRAPH_EXTRACT_MODEL = os.getenv("GRAPH_EXTRACT_MODEL", "qwen-plus")
+
+# MCP (Model Context Protocol) 外部工具服务器
+BAIDU_MAP_API_KEY = os.getenv("BAIDU_MAP_API_KEY", "")
+
 # 文件上传
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))  # 50MB

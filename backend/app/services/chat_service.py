@@ -18,6 +18,7 @@ from ..tools import ALL_TOOLS
 from .embedding import embed_single
 from .vector_store import query as vector_query
 from .bm25_store import get_bm25_store
+from .graph_retrieval import extract_entities_from_chunks, retrieve_graph_context
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
 
     # ━━━ RAG 检索 ━━━
     rag_section = "（无参考资料，使用自身知识回答）"
+    graph_section = ""
     sources: list[str] = []
     if mode == "rag":
         # ── 稠密检索 (ChromaDB 向量) ──
@@ -190,6 +192,15 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
         results = _rrf_merge(dense_results, sparse_results)
         logger.info("RRF 融合后: %d 条 (稠密=%d, 稀疏=%d)", len(results), len(dense_results), len(sparse_results))
 
+        # ── 知识图谱检索 ──
+        graph_section = ""
+        try:
+            entity_names = extract_entities_from_chunks(results)
+            if entity_names:
+                graph_section = retrieve_graph_context(entity_names, user_id)
+        except Exception as e:
+            logger.warning("图谱检索失败: %s", e)
+
         if results:
                 docs: dict[str, dict] = {}
                 for r in results:
@@ -212,6 +223,7 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
     system_content = CHAT_SYSTEM_PROMPT.format(
         history_section=history_section,
         rag_section=rag_section,
+        graph_section=graph_section,
         user_question=user_msg,
     )
 

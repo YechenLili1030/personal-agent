@@ -22,6 +22,25 @@ async def lifespan(application: FastAPI):
     from .services.bm25_store import init_bm25_store
     init_bm25_store(BM25_INDEX_PATH)
 
+    # MCP 客户端初始化 + 加载外部工具
+    from .mcp.client import init_mcp_client
+    from .tools import refresh_all_tools
+    await init_mcp_client()
+    await refresh_all_tools()
+
+    # 数据库迁移：确保 knowledge_docs 有 graph_status 列
+    try:
+        from .core.database import engine as async_engine
+        from sqlalchemy import text as sa_text
+        async with async_engine.connect() as conn:
+            await conn.execute(sa_text(
+                "ALTER TABLE knowledge_docs ADD COLUMN graph_status VARCHAR(16) DEFAULT NULL"
+            ))
+            await conn.commit()
+        logger.info("数据库迁移: graph_status 列已添加")
+    except Exception:
+        logger.debug("graph_status 列可能已存在，跳过迁移")
+
     logger.info("PersonalAgent 启动完成")
     yield
     logger.info("PersonalAgent 关闭")

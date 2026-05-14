@@ -74,6 +74,18 @@ export function finalizeDocument(docId) {
   return api.post(`/knowledge/${docId}/finalize`)
 }
 
+export function buildKnowledgeGraph(docId) {
+  return api.post(`/knowledge/${docId}/build-graph`)
+}
+
+export function deleteKnowledgeGraph(docId) {
+  return api.delete(`/knowledge/${docId}/graph`)
+}
+
+export function getKnowledgeGraph(docId) {
+  return api.get(`/knowledge/${docId}/graph`)
+}
+
 // 对话
 export function createSession(title = '新对话', mode = 'normal') {
   return api.post('/chat/session/create', { title, mode })

@@ -96,6 +96,10 @@
             </div>
             <div class="doc-actions">
               <span class="status-badge" :class="doc.status">{{ statusLabel(doc.status) }}</span>
+              <span v-if="doc.graph_status === 'built'" class="graph-badge built" title="知识图谱已构建">图谱</span>
+              <span v-else-if="doc.graph_status === 'building'" class="graph-badge building" title="知识图谱构建中">图谱构建中...</span>
+              <span v-else-if="doc.graph_status === 'failed'" class="graph-badge failed" title="知识图谱构建失败">图谱失败</span>
+
               <button
                 v-if="doc.status === 'inspecting'"
                 class="inspect-btn"
@@ -103,7 +107,39 @@
               >
                 审查分块
               </button>
-              <button class="delete-btn" @click="handleDelete(doc)" title="删除">
+              <button
+                v-if="doc.status === 'done' || doc.status === 'inspecting' || doc.status === 'failed'"
+                class="view-btn"
+                @click="openChunkViewer(doc)"
+              >
+                查看分块
+              </button>
+              <button
+                v-if="doc.graph_status === 'built'"
+                class="view-graph-btn"
+                @click="openGraphViewer(doc)"
+              >
+                查看图谱
+              </button>
+              <button
+                v-if="doc.status === 'done' && doc.graph_status !== 'building' && doc.graph_status !== 'built'"
+                class="graph-build-btn"
+                :disabled="graphBuilding[doc.doc_id]"
+                @click="handleBuildGraph(doc)"
+              >
+                {{ graphBuilding[doc.doc_id] ? '构建中...' : '构建图谱' }}
+              </button>
+              <button
+                v-if="doc.graph_status === 'built'"
+                class="graph-del-btn"
+                @click="handleDeleteGraph(doc)"
+                title="删除知识图谱"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>
+                </svg>
+              </button>
+              <button class="delete-btn" @click="handleDelete(doc)" title="删除文档">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
                 </svg>
@@ -147,13 +183,29 @@
     @close="showInspector = false"
     @finalized="onInspectorFinalized"
   />
+
+  <ChunkViewerModal
+    :visible="showChunkViewer"
+    :docId="viewingDoc?.doc_id || ''"
+    :docFilename="viewingDoc?.filename || ''"
+    @close="showChunkViewer = false"
+  />
+
+  <GraphViewerModal
+    :visible="showGraphViewer"
+    :docId="viewingGraphDoc?.doc_id || ''"
+    :docFilename="viewingGraphDoc?.filename || ''"
+    @close="showGraphViewer = false"
+  />
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import ChunkInspectorModal from '../components/ChunkInspectorModal.vue'
-import { getKnowledgeList, uploadKnowledge, deleteKnowledge } from '../api/index.js'
+import ChunkViewerModal from '../components/ChunkViewerModal.vue'
+import GraphViewerModal from '../components/GraphViewerModal.vue'
+import { getKnowledgeList, uploadKnowledge, deleteKnowledge, buildKnowledgeGraph, deleteKnowledgeGraph } from '../api/index.js'
 
 const fileInput = ref(null)
 
@@ -273,6 +325,55 @@ function openInspector(doc) {
 
 function onInspectorFinalized() {
   fetchList()
+}
+
+// Chunk viewer (read-only)
+const showChunkViewer = ref(false)
+const viewingDoc = ref(null)
+
+function openChunkViewer(doc) {
+  viewingDoc.value = doc
+  showChunkViewer.value = true
+}
+
+// Graph viewer
+const showGraphViewer = ref(false)
+const viewingGraphDoc = ref(null)
+
+function openGraphViewer(doc) {
+  viewingGraphDoc.value = doc
+  showGraphViewer.value = true
+}
+
+// Graph
+const graphBuilding = ref({})
+
+async function handleBuildGraph(doc) {
+  graphBuilding.value = { ...graphBuilding.value, [doc.doc_id]: true }
+  try {
+    const res = await buildKnowledgeGraph(doc.doc_id)
+    if (res.code === 0) {
+      doc.graph_status = 'building'
+      // 轮询或延迟刷新以获取最终状态
+      setTimeout(() => fetchList(), 3000)
+      setTimeout(() => fetchList(), 8000)
+    }
+  } catch (e) {
+    console.error('图谱构建失败', e)
+  } finally {
+    graphBuilding.value = { ...graphBuilding.value, [doc.doc_id]: false }
+  }
+}
+
+async function handleDeleteGraph(doc) {
+  try {
+    const res = await deleteKnowledgeGraph(doc.doc_id)
+    if (res.code === 0) {
+      doc.graph_status = null
+    }
+  } catch (e) {
+    console.error('图谱删除失败', e)
+  }
 }
 
 // Format helpers
@@ -480,6 +581,57 @@ function statusLabel(s) {
   transition: all 0.2s; white-space: nowrap;
 }
 .inspect-btn:hover { background: #f0f4fa; }
+
+.graph-badge {
+  font-size: 11px; font-weight: 600;
+  padding: 4px 10px; border-radius: 3px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.graph-badge.built { background: #e8f3eb; color: #217346; }
+.graph-badge.building { background: #fdf6e3; color: #b8944b; animation: pulse-graph 1.5s ease-in-out infinite; }
+.graph-badge.failed { background: #fef0ef; color: #c13227; }
+
+@keyframes pulse-graph {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.graph-build-btn {
+  padding: 5px 14px; border-radius: 3px;
+  border: 1px solid #217346;
+  background: transparent; color: #217346;
+  font-size: 12px; font-family: var(--font-body); cursor: pointer;
+  transition: all 0.2s; white-space: nowrap;
+}
+.graph-build-btn:hover:not(:disabled) { background: #e8f3eb; }
+.graph-build-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.graph-del-btn {
+  background: none; border: none;
+  color: var(--stone-light); cursor: pointer;
+  padding: 2px; border-radius: 3px;
+  transition: color 0.2s;
+}
+.graph-del-btn:hover { color: var(--vermillion); }
+
+.view-btn {
+  padding: 5px 14px; border-radius: 3px;
+  border: 1px solid var(--stone-light);
+  background: transparent; color: var(--stone);
+  font-size: 12px; font-family: var(--font-body); cursor: pointer;
+  transition: all 0.2s; white-space: nowrap;
+}
+.view-btn:hover { border-color: var(--ink-black); color: var(--ink-black); }
+
+.view-graph-btn {
+  padding: 5px 14px; border-radius: 3px;
+  border: 1px solid #217346;
+  background: transparent; color: #217346;
+  font-size: 12px; font-family: var(--font-body); cursor: pointer;
+  transition: all 0.2s; white-space: nowrap;
+}
+.view-graph-btn:hover { background: #e8f3eb; }
 
 .inspect-toggle {
   display: inline-flex; align-items: center; gap: 8px;

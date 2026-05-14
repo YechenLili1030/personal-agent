@@ -15,6 +15,7 @@ from ..services.knowledge_service import (
     save_upload, process_document, delete_document,
     merge_chunks, delete_chunk, finalize_document,
 )
+from ..services.graph_service import build_graph_from_doc, delete_doc_graph, get_doc_graph
 from .deps import require_user
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ async def list_docs(
         "chunk_count": d.chunk_count,
         "char_count": d.char_count,
         "category": d.category,
+        "graph_status": d.graph_status,
         "error_msg": d.error_msg,
         "created_at": d.created_at.isoformat() if d.created_at else None,
         "updated_at": d.updated_at.isoformat() if d.updated_at else None,
@@ -191,6 +193,7 @@ async def get_doc(doc_id: str, db: AsyncSession = Depends(get_db)):
             "chunk_count": doc.chunk_count,
             "char_count": doc.char_count,
             "category": doc.category,
+            "graph_status": doc.graph_status,
             "error_msg": doc.error_msg,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
@@ -207,8 +210,6 @@ async def get_doc_chunks(
     doc = await db.get(KnowledgeDoc, doc_id)
     if not doc:
         raise HTTPException(404, detail="文档不存在")
-    if doc.status != "inspecting":
-        raise HTTPException(400, detail="文档不在审查状态")
 
     chunks = (await db.execute(
         select(DocChunk)
@@ -255,7 +256,74 @@ async def finalize_doc(
 
 @router.delete("/{doc_id}")
 async def delete_doc(doc_id: str, db: AsyncSession = Depends(get_db)):
+    # 同时删除关联的知识图谱
+    delete_doc_graph(doc_id)
     deleted = await delete_document(db, doc_id)
     if not deleted:
         raise HTTPException(404, detail="文档不存在")
     return {"code": 0, "data": {"deleted": True, "doc_id": doc_id}}
+
+
+@router.get("/{doc_id}/graph")
+async def get_doc_graph_data(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取文档的知识图谱数据（节点和边），供前端可视化"""
+    doc = await db.get(KnowledgeDoc, doc_id)
+    if not doc:
+        raise HTTPException(404, detail="文档不存在")
+    data = get_doc_graph(doc_id)
+    return {"code": 0, "data": data}
+
+
+@router.post("/{doc_id}/build-graph")
+async def build_knowledge_graph(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    """为指定文档构建知识图谱"""
+    doc = await db.get(KnowledgeDoc, doc_id)
+    if not doc:
+        raise HTTPException(404, detail="文档不存在")
+    if doc.status != "done":
+        raise HTTPException(400, detail="文档尚未处理完成，无法构建知识图谱")
+    if doc.graph_status == "building":
+        raise HTTPException(400, detail="知识图谱正在构建中")
+
+    doc.graph_status = "building"
+    await db.commit()
+
+    asyncio.create_task(_background_build_graph(doc_id, current_user.id))
+
+    return {
+        "code": 0,
+        "data": {"doc_id": doc_id, "graph_status": "building"},
+        "message": "知识图谱构建已启动",
+    }
+
+
+async def _background_build_graph(doc_id: str, user_id: str):
+    """后台构建知识图谱"""
+    from ..core.database import async_session
+    async with async_session() as db:
+        await build_graph_from_doc(db, doc_id, user_id)
+
+
+@router.delete("/{doc_id}/graph")
+async def delete_knowledge_graph(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user),
+):
+    """删除指定文档的知识图谱数据"""
+    doc = await db.get(KnowledgeDoc, doc_id)
+    if not doc:
+        raise HTTPException(404, detail="文档不存在")
+
+    delete_doc_graph(doc_id)
+    doc.graph_status = None
+    await db.commit()
+
+    return {"code": 0, "data": {"doc_id": doc_id, "graph_status": None}, "message": "知识图谱已删除"}

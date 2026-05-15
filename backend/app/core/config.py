@@ -58,6 +58,9 @@ GRAPH_EXTRACT_MODEL = os.getenv("GRAPH_EXTRACT_MODEL", "qwen-plus")
 # MCP (Model Context Protocol) 外部工具服务器
 BAIDU_MAP_API_KEY = os.getenv("BAIDU_MAP_API_KEY", "")
 
+# 意图识别
+INTENT_MODEL = os.getenv("INTENT_MODEL", "tongyi-intent-detect-v3")
+
 # 文件上传
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))  # 50MB

@@ -27,10 +27,7 @@ async def create_chat_session(
     current_user: User = Depends(require_user),
 ):
     title = body.get("title", "新对话")
-    mode = body.get("mode", "normal")
-    if mode not in ("normal", "rag"):
-        raise HTTPException(400, detail="mode 必须为 normal 或 rag")
-    session = await create_session(db, current_user.id, title, mode)
+    session = await create_session(db, current_user.id, title)
     return {
         "code": 0,
         "data": {
@@ -128,17 +125,9 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                     continue
 
                 content = data.get("content", "").strip()
-                mode = data.get("mode", session.mode)
-                if mode not in ("normal", "rag"):
-                    mode = "normal"
 
                 if not content:
                     continue
-
-                # 更新 session mode
-                if mode != session.mode:
-                    session.mode = mode
-                    await db.commit()
 
                 # 保存用户消息
                 await save_message(db, session_id, "user", content)
@@ -152,8 +141,8 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                     await db.commit()
                     await ws.send_json({"type": "title", "data": session.title})
 
-                # 构建上下文
-                messages, sources = await build_context(db, session_id, content, mode, user.id)
+                # 构建上下文（自动意图识别，替代手动 mode 切换）
+                messages, sources, intent = await build_context(db, session_id, content, user.id)
 
                 # 流式回复
                 full_response = ""
@@ -163,7 +152,7 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                     await ws.send_json({"type": "token", "data": token})
 
                 # 保存助手消息
-                meta = {"mode": mode}
+                meta = {"intent": intent}
                 if sources:
                     meta["sources"] = sources
                 await save_message(db, session_id, "assistant", full_response, meta)
@@ -171,7 +160,7 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                 # 完成
                 if sources:
                     await ws.send_json({"type": "sources", "data": sources})
-                await ws.send_json({"type": "done", "data": {"sources": sources}})
+                await ws.send_json({"type": "done", "data": {"sources": sources, "intent": intent}})
 
         except WebSocketDisconnect:
             pass

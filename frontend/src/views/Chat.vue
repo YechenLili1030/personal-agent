@@ -75,11 +75,11 @@
           <span v-else class="mini-spinner"></span>
         </button>
       </div>
+
       <div class="input-toolbar">
-        <div class="mode-switch">
-          <button :class="{ active: currentMode === 'normal' }" @click="switchMode('normal')">普通模式</button>
-          <button :class="{ active: currentMode === 'rag' }" @click="switchMode('rag')">RAG 增强</button>
-        </div>
+        <span class="intent-badge" v-if="lastIntent" :class="lastIntent">
+          {{ intentLabel(lastIntent) }}
+        </span>
       </div>
     </div>
   </div>
@@ -100,7 +100,7 @@ const userInitial = computed(() => (user.value?.nickname || user.value?.username
 
 const currentSessionId = ref(null)
 const currentTitle = ref('')
-const currentMode = ref('rag')
+const lastIntent = ref('')
 const messages = ref([])
 const inputText = ref('')
 const loading = ref(false)
@@ -123,9 +123,9 @@ onUnmounted(() => { disconnectWs() })
 async function handleNewChat() {
   loading.value = false; streaming.value = false; streamText.value = ''
   messages.value = []; disconnectWs()
-  currentSessionId.value = null; currentTitle.value = ''; currentMode.value = 'rag'
+  currentSessionId.value = null; currentTitle.value = ''; lastIntent.value = ''
   try {
-    const res = await createSession('新对话', 'rag')
+    const res = await createSession('新对话')
     if (res.code === 0) {
       currentSessionId.value = res.data.session_id
       currentTitle.value = res.data.title
@@ -138,7 +138,7 @@ async function switchSession(sid) {
   if (sid === currentSessionId.value) return
   disconnectWs(); messages.value = []; streamText.value = ''
   streaming.value = false; loading.value = false
-  currentSessionId.value = sid; currentMode.value = 'rag'
+  currentSessionId.value = sid; lastIntent.value = ''
   try {
     const res = await getMessageHistory(sid)
     if (res.code === 0) {
@@ -158,7 +158,7 @@ function connectWs(sid) {
       const data = JSON.parse(e.data)
       if (data.type === 'token') { streamText.value += data.data; scrollBottom() }
       else if (data.type === 'title') { currentTitle.value = data.data }
-      else if (data.type === 'done') { finishMessage(data.data?.sources || []) }
+      else if (data.type === 'done') { finishMessage(data.data?.sources || []); lastIntent.value = data.data?.intent || '' }
       else if (data.type === 'error') { loading.value = false; streaming.value = false; alert(data.data?.message || '发生错误') }
     }
     ws.onclose = () => { wsReady.value = false }
@@ -175,16 +175,19 @@ function handleSend() {
   messages.value.push({ role: 'user', content: text })
   streamText.value = ''; streaming.value = true; loading.value = true
   inputText.value = ''; autoResize(); scrollBottom()
-  ws.send(JSON.stringify({ type: 'chat', content: text, mode: currentMode.value }))
+  ws.send(JSON.stringify({ type: 'chat', content: text }))
 }
 
 function finishMessage(sources) {
-  const meta = { mode: currentMode.value }; if (sources?.length) meta.sources = sources
+  const meta = {}; if (sources?.length) meta.sources = sources
   messages.value.push({ role: 'assistant', content: streamText.value, metadata: meta })
   streamText.value = ''; streaming.value = false; loading.value = false; scrollBottom()
 }
 
-function switchMode(mode) { currentMode.value = mode }
+function intentLabel(i) {
+  const map = { chat: '通用问答', rag: '知识库检索' }
+  return map[i] || i
+}
 function autoResize() { nextTick(() => { const el = inputEl.value; if (el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px' } }) }
 function scrollBottom() { nextTick(() => { if (msgList.value) msgList.value.scrollTop = msgList.value.scrollHeight }) }
 </script>
@@ -239,10 +242,9 @@ function scrollBottom() { nextTick(() => { if (msgList.value) msgList.value.scro
 .send-btn:hover:not(:disabled) { background: var(--vermillion); transform: scale(1.05); }
 .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .input-toolbar { display: flex; align-items: center; justify-content: flex-start; margin-top: 10px; }
-.mode-switch { display: flex; gap: 4px; background: rgba(0,0,0,0.04); border-radius: 6px; padding: 3px; }
-.mode-switch button { padding: 5px 14px; border: none; border-radius: 4px; background: transparent; font-size: 12px; font-family: var(--font-body); cursor: pointer; color: var(--stone); transition: all 0.2s; letter-spacing: 0.04em; }
-.mode-switch button.active { background: #fff; color: var(--ink-black); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-.mode-switch button:not(.active):hover { color: var(--ink-black); }
+.intent-badge { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 3px; letter-spacing: 0.04em; }
+.intent-badge.chat { background: #f5f5f5; color: #999; }
+.intent-badge.rag { background: #e8f3eb; color: #217346; }
 .mini-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

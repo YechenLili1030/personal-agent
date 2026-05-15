@@ -19,6 +19,7 @@ from .embedding import embed_single
 from .vector_store import query as vector_query
 from .bm25_store import get_bm25_store
 from .graph_retrieval import extract_entities_from_chunks, retrieve_graph_context
+from .intent import detect_intent
 
 logger = logging.getLogger(__name__)
 
@@ -149,10 +150,14 @@ def _rrf_merge(dense_results: list[dict], sparse_results: list[dict],
 
 # =========================== Context ===========================
 
-async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: str,
-                       user_id: str = "") -> tuple[list[dict], list[str]]:
-    """将所有上下文打包到 system prompt，返回 messages + 来源文件名列表。"""
+async def build_context(db: AsyncSession, session_id: str, user_msg: str,
+                       user_id: str = "") -> tuple[list[dict], list[str], str]:
+    """将所有上下文打包到 system prompt，返回 messages + 来源文件名列表 + 意图。"""
     history = await get_history(db, session_id, CONTEXT_WINDOW)
+
+    # ━━━ 意图识别 ━━━
+    intent = await detect_intent(user_msg)
+    need_retrieval = intent == "rag"
 
     # ━━━ 历史对话 ━━━
     if history:
@@ -169,7 +174,7 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
     rag_section = "（无参考资料，使用自身知识回答）"
     graph_section = ""
     sources: list[str] = []
-    if mode == "rag":
+    if need_retrieval:
         # ── 稠密检索 (ChromaDB 向量) ──
         dense_results: list[dict] = []
         try:
@@ -193,13 +198,13 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
         logger.info("RRF 融合后: %d 条 (稠密=%d, 稀疏=%d)", len(results), len(dense_results), len(sparse_results))
 
         # ── 知识图谱检索 ──
-        graph_section = ""
-        try:
-            entity_names = extract_entities_from_chunks(results)
-            if entity_names:
-                graph_section = retrieve_graph_context(entity_names, user_id)
-        except Exception as e:
-            logger.warning("图谱检索失败: %s", e)
+        if results:
+            try:
+                entity_names = extract_entities_from_chunks(results)
+                if entity_names:
+                    graph_section = retrieve_graph_context(entity_names, user_id)
+            except Exception as e:
+                logger.warning("图谱检索失败: %s", e)
 
         if results:
                 docs: dict[str, dict] = {}
@@ -227,7 +232,7 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str, mode: 
         user_question=user_msg,
     )
 
-    return [{"role": "system", "content": system_content}, {"role": "user", "content": user_msg}], sources
+    return [{"role": "system", "content": system_content}, {"role": "user", "content": user_msg}], sources, intent
 
 
 # =========================== Streaming with Tools ===========================

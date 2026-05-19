@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import (
     NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD,
-    BAILIAN_API_KEY, BAILIAN_BASE_URL, GRAPH_EXTRACT_MODEL,
+    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, GRAPH_EXTRACT_MODEL,
 )
 from ..core.prompts import GRAPH_EXTRACT_PROMPT
 
@@ -31,7 +31,7 @@ def _get_driver() -> Driver:
 
 
 def _get_llm() -> OpenAI:
-    return OpenAI(api_key=BAILIAN_API_KEY, base_url=BAILIAN_BASE_URL)
+    return OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
 
 # ═══════════════════════ 构建图谱 ═══════════════════════
@@ -96,9 +96,9 @@ def _extract_entities_and_relations(text: str) -> dict:
         model=GRAPH_EXTRACT_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        max_tokens=3000,
+        extra_body={"thinking": {"type": "disabled"}},
     )
-    raw = resp.choices[0].message.content.strip()
+    raw = (resp.choices[0].message.content or "").strip()
     logger.debug("LLM 图谱抽取原始响应: %s", raw[:300])
 
     return _parse_json(raw)

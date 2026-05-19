@@ -28,6 +28,10 @@ async def lifespan(application: FastAPI):
     await init_mcp_client()
     await refresh_all_tools()
 
+    # RAG 流水线初始化（打印组件配置）
+    from .rag import get_pipeline
+    get_pipeline()
+
     # 数据库迁移：确保 knowledge_docs 有 graph_status 列
     try:
         from .core.database import engine as async_engine

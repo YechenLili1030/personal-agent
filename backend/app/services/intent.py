@@ -9,6 +9,7 @@ import logging
 from openai import OpenAI
 
 from ..core.config import BAILIAN_API_KEY, BAILIAN_BASE_URL, INTENT_MODEL
+from ..core.prompts import INTENT_DETECT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -32,27 +33,7 @@ async def detect_intent(user_msg: str) -> str:
 
     只判断是否需要 RAG 检索。工具调用由 ReAct 自行决策。
     """
-    prompt = f"""你是一个意图分类助手。判断用户问题是否需要检索个人知识库。
-
-## 分类规则
-- rag：问题涉及用户的个人数据（文档、合同、笔记、联系人、日程、产品、项目），需要检索知识库
-- chat：通用知识问答（历史、科学、常识、编程）、闲聊（你好、谢谢）、实时查询（天气、时间、导航）等
-
-## 示例
-- "我的合同里有没有违约条款" → rag
-- "帮我查一下上周的会议记录" → rag
-- "项目管理文档里关于部署流程怎么写的" → rag
-- "什么是微服务架构" → chat
-- "今天天气怎么样" → chat
-- "现在几点了" → chat
-- "帮我导航到最近的加油站" → chat
-- "你好啊，讲个笑话" → chat
-- "成都到北京多远" → chat
-
-用户问题：{user_msg}
-
-## 输出（只输出一个词，不要解释，不要标点）
-意图："""
+    prompt = INTENT_DETECT_PROMPT.format(user_msg=user_msg)
 
     try:
         client = _get_client()

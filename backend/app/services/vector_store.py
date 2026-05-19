@@ -23,7 +23,10 @@ def _get_client() -> PersistentClient:
 
 def get_collection():
     client = _get_client()
-    return client.get_or_create_collection(name=CHROMA_COLLECTION)
+    return client.get_or_create_collection(
+        name=CHROMA_COLLECTION,
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 def add_chunks(chunk_ids: list[str], texts: list[str], embeddings: list[list[float]],

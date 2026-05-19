@@ -1,0 +1,8 @@
+Collecting redis
+  Downloading redis-7.4.0-py3-none-any.whl.metadata (12 kB)
+Downloading redis-7.4.0-py3-none-any.whl (409 kB)
+Installing collected packages: redis
+Successfully installed redis-7.4.0
+
+[notice] A new release of pip is available: 25.0.1 -> 26.1.1
+[notice] To update, run: D:\file\personal-agent\.venv\Scripts\python.exe -m pip install --upgrade pip

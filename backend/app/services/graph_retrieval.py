@@ -9,7 +9,7 @@ import jieba
 import jieba.posseg as pseg
 from openai import OpenAI
 
-from ..core.config import BAILIAN_API_KEY, BAILIAN_BASE_URL, GRAPH_EXTRACT_MODEL
+from ..core.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, GRAPH_EXTRACT_MODEL
 from ..core.prompts import GRAPH_ENTITY_PROMPT
 from .graph_service import query_graph
 
@@ -20,7 +20,7 @@ ENTITY_POS_TAGS = {"nr", "ns", "nt", "nz", "nrfg", "nrt"}
 
 
 def _get_llm() -> OpenAI:
-    return OpenAI(api_key=BAILIAN_API_KEY, base_url=BAILIAN_BASE_URL)
+    return OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
 
 # ═══════════════════════ 实体抽取 (混合策略) ═══════════════════════
@@ -91,8 +91,9 @@ def _extract_entities_llm(chunks: list[dict]) -> list[str]:
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
         max_tokens=200,
+        extra_body={"thinking": {"type": "disabled"}},
     )
-    raw = resp.choices[0].message.content.strip()
+    raw = (resp.choices[0].message.content or "").strip()
 
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1]

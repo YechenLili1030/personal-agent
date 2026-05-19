@@ -4,7 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
+import asyncio
+
 from ..core.database import get_db, async_session
+from ..memory import get_working_memory, compress_and_store, extract_and_update
 from ..models.user import User
 from ..models.chat import Session, Message
 from ..services.auth import get_current_user
@@ -129,8 +132,10 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                 if not content:
                     continue
 
-                # 保存用户消息
+                # 保存用户消息 (MySQL) + 更新工作记忆 (Redis)
+                wm = get_working_memory()
                 await save_message(db, session_id, "user", content)
+                await wm.append(user.id, session_id, "user", content, db)
 
                 # 首条消息自动生成标题
                 msg_count = (await db.execute(
@@ -151,11 +156,23 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                     full_response += token
                     await ws.send_json({"type": "token", "data": token})
 
-                # 保存助手消息
+                # 保存助手消息 (MySQL) + 更新工作记忆 (Redis)
                 meta = {"intent": intent}
                 if sources:
                     meta["sources"] = sources
                 await save_message(db, session_id, "assistant", full_response, meta)
+                await wm.append(user.id, session_id, "assistant", full_response, db)
+
+                # 异步记忆写入 (情景 + 语义)
+                from ..core.config import EPISODIC_ENABLED, SEMANTIC_ENABLED
+                if EPISODIC_ENABLED or SEMANTIC_ENABLED:
+                    all_msgs = await get_history(db, session_id)
+                    if EPISODIC_ENABLED:
+                        asyncio.create_task(compress_and_store(
+                            user.id, session_id, all_msgs))
+                    if SEMANTIC_ENABLED:
+                        asyncio.create_task(_background_semantic_extract(
+                            user.id, all_msgs))
 
                 # 完成
                 if sources:
@@ -170,3 +187,10 @@ async def chat_websocket(ws: WebSocket, session_id: str, token: str = Query(...)
                 await ws.send_json({"type": "error", "data": {"message": str(e)}})
             except Exception:
                 pass
+
+
+async def _background_semantic_extract(user_id: str, messages: list[dict]):
+    """后台任务: 用独立 DB 会话提取语义记忆"""
+    from ..memory.semantic import extract_and_update
+    async with async_session() as db:
+        await extract_and_update(user_id, db, messages)

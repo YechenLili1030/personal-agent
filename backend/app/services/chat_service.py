@@ -11,20 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sa_delete
 from tiktoken import encoding_for_model
 
-from ..core.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, CHAT_MODEL, DENSE_RECALL_K, SPARSE_RECALL_K, RRF_K
+from ..core.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, CHAT_MODEL, EPISODIC_ENABLED, SEMANTIC_ENABLED
 from ..core.prompts import CHAT_SYSTEM_PROMPT, TITLE_PROMPT
 from ..models.chat import Session, Message
+from ..models.user import User
 from ..tools import ALL_TOOLS
-from .embedding import embed_single
-from .vector_store import query as vector_query
-from .bm25_store import get_bm25_store
+from ..rag import get_pipeline
+from ..memory import get_working_memory, retrieve_episodes, format_semantic_section, load_preferences
 from .graph_retrieval import extract_entities_from_chunks, retrieve_graph_context
 from .intent import detect_intent
 
 logger = logging.getLogger(__name__)
 
 CONTEXT_WINDOW = 20
-RAG_TOP_K = 20
 
 _enc = encoding_for_model("gpt-4")  # cl100k_base, 通用估算
 
@@ -125,44 +124,34 @@ async def save_message(db: AsyncSession, session_id: str, role: str, content: st
     return msg
 
 
-# ═══════════════════════ RRF 融合 ═══════════════════════
-
-def _rrf_merge(dense_results: list[dict], sparse_results: list[dict],
-               k: int = RRF_K, top_k: int = RAG_TOP_K) -> list[dict]:
-    """使用 Reciprocal Rank Fusion 合并稠密和稀疏两路检索结果"""
-    lookup: dict[str, dict] = {}
-    rrf_scores: dict[str, float] = defaultdict(float)
-
-    for rank, r in enumerate(dense_results):
-        cid = r["chunk_id"]
-        lookup[cid] = r
-        rrf_scores[cid] += 1.0 / (k + rank + 1)
-
-    for rank, r in enumerate(sparse_results):
-        cid = r["chunk_id"]
-        if cid not in lookup:
-            lookup[cid] = r
-        rrf_scores[cid] += 1.0 / (k + rank + 1)
-
-    sorted_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)
-    return [lookup[cid] for cid in sorted_ids[:top_k]]
-
-
 # =========================== Context ===========================
 
 async def build_context(db: AsyncSession, session_id: str, user_msg: str,
                        user_id: str = "") -> tuple[list[dict], list[str], str]:
     """将所有上下文打包到 system prompt，返回 messages + 来源文件名列表 + 意图。"""
-    history = await get_history(db, session_id, CONTEXT_WINDOW)
+    wm = get_working_memory()
+
+    # ━━━ 语义记忆 (用户画像, MySQL JSON) ━━━
+    user = await db.get(User, user_id) if user_id else None
+    semantic = load_preferences(user)
+
+    # ━━━ 工作记忆 (Redis → MySQL 降级, 8K token 窗口) ━━━
+    history = await wm.get_window(user_id, session_id, db)
+    logger.info("工作记忆: %d 条消息, %d tokens", len(history), _count_tokens(history))
+
+    # ━━━ 情景记忆 (ChromaDB 语义检索历史片段) ━━━
+    episodes = await retrieve_episodes(user_msg, user_id) if EPISODIC_ENABLED else []
 
     # ━━━ 意图识别 ━━━
+    t_intent = time.time()
     intent = await detect_intent(user_msg)
+    logger.info("意图识别: %s | %.0fms", intent, (time.time() - t_intent) * 1000)
     need_retrieval = intent == "rag"
 
     # ━━━ 历史对话 ━━━
     if history:
         lines = ["【历史对话 · 仅供参考 · 不要重复回答以下内容】"]
-        for m in history[-CONTEXT_WINDOW:]:
+        for m in history:
             role_label = "用户" if m["role"] == "user" else "助手"
             content = m["content"][:500] + "..." if len(m["content"]) > 500 else m["content"]
             lines.append(f"{role_label}: {content}")
@@ -170,37 +159,33 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str,
     else:
         history_section = "（无历史对话）"
 
+    # ━━━ 情景记忆格式化 ━━━
+    episodic_section = "（无相关历史片段）"
+    if episodes:
+        lines = ["【以下是与当前问题相关的历史交互片段】"]
+        for ep in episodes:
+            lines.append(f"- {ep['content']}")
+        episodic_section = "\n".join(lines)
+
     # ━━━ RAG 检索 ━━━
     rag_section = "（无参考资料，使用自身知识回答）"
     graph_section = ""
     sources: list[str] = []
     if need_retrieval:
-        # ── 稠密检索 (ChromaDB 向量) ──
-        dense_results: list[dict] = []
-        try:
-            query_emb = await embed_single(user_msg)
-            dense_results = vector_query(query_emb, top_k=DENSE_RECALL_K, user_id=user_id)
-            logger.info("稠密检索: query='%s' -> %d 条", user_msg[:60], len(dense_results))
-        except Exception as e:
-            logger.warning("稠密检索失败: %s", e)
-
-        # ── 稀疏检索 (BM25 关键词) ──
-        sparse_results: list[dict] = []
-        try:
-            bm25 = get_bm25_store()
-            sparse_results = bm25.search(user_msg, top_k=SPARSE_RECALL_K, user_id=user_id)
-            logger.info("稀疏检索: query='%s' -> %d 条", user_msg[:60], len(sparse_results))
-        except Exception as e:
-            logger.warning("稀疏检索失败: %s", e)
-
-        # ── RRF 融合 ──
-        results = _rrf_merge(dense_results, sparse_results)
-        logger.info("RRF 融合后: %d 条 (稠密=%d, 稀疏=%d)", len(results), len(dense_results), len(sparse_results))
+        # ── RAG 流水线: 改写 → 稠密+稀疏检索 → RRF融合 → Rerank ──
+        pipeline = get_pipeline()
+        history_dicts = [{"role": m["role"], "content": m["content"]} for m in (history or [])]
+        results = await pipeline.run(
+            query=user_msg,
+            history=history_dicts,
+            user_id=user_id,
+        )
 
         # ── 知识图谱检索 ──
         if results:
             try:
-                entity_names = extract_entities_from_chunks(results)
+                entity_names = extract_entities_from_chunks(
+                    [r.to_dict() for r in results])
                 if entity_names:
                     graph_section = retrieve_graph_context(entity_names, user_id)
             except Exception as e:
@@ -209,11 +194,11 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str,
         if results:
                 docs: dict[str, dict] = {}
                 for r in results:
-                    meta = r.get("metadata", {})
+                    meta = r.metadata
                     src = meta.get("filename", "未知")
                     if src not in docs:
                         docs[src] = {"summary": meta.get("summary", ""), "chunks": []}
-                    docs[src]["chunks"].append(r["content"])
+                    docs[src]["chunks"].append(r.content)
 
                 sources = list(docs.keys())
                 parts = []
@@ -224,8 +209,13 @@ async def build_context(db: AsyncSession, session_id: str, user_msg: str,
                     parts.append(header + "\n" + "\n---\n".join(info["chunks"]))
                 rag_section = "\n\n".join(parts)
 
+    # ━━━ 语义记忆格式化 ━━━
+    semantic_section = format_semantic_section(semantic) if SEMANTIC_ENABLED else ""
+
     # ━━━ 组装 ━━━
     system_content = CHAT_SYSTEM_PROMPT.format(
+        semantic_section=semantic_section,
+        episodic_section=episodic_section,
         history_section=history_section,
         rag_section=rag_section,
         graph_section=graph_section,

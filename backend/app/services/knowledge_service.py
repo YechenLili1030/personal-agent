@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 from ..core.config import (
     UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP,
     BAILIAN_API_KEY, BAILIAN_BASE_URL,
+    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL,
     SUMMARY_MODEL, MULTIMODAL_MODEL, SUMMARY_MAX_CHARS,
 )
 from ..core.prompts import SUMMARY_PROMPT, MULTIMODAL_PROMPT
@@ -32,13 +33,14 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 10
 
 
-def _build_llm(model: str, temperature: float = 0.3, max_tokens: int = 200) -> ChatOpenAI:
+def _build_llm(model: str, temperature: float = 0.3, max_tokens: int = 200,
+               api_key: str = BAILIAN_API_KEY, base_url: str = BAILIAN_BASE_URL) -> ChatOpenAI:
     return ChatOpenAI(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
-        api_key=BAILIAN_API_KEY,
-        base_url=BAILIAN_BASE_URL,
+        api_key=api_key,
+        base_url=base_url,
     )
 
 EXCEL_CHUNK_HEADER_ROWS = 2
@@ -97,7 +99,7 @@ async def _summarize_document(text: str, filename: str) -> str:
     snippet = text[:SUMMARY_MAX_CHARS]
     prompt = SUMMARY_PROMPT.format(text=snippet)
     try:
-        llm = _build_llm(SUMMARY_MODEL)
+        llm = _build_llm(SUMMARY_MODEL, api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
         resp = llm.invoke(prompt)
         summary = resp.content.strip()
         logger.info("文档 %s 摘要: %s", filename, summary)

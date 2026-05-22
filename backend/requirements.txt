@@ -24,3 +24,4 @@ neo4j>=5.0
 mcp>=1.0
 redis>=5.0
 langchain-mcp-adapters>=0.1
+apscheduler>=3.10

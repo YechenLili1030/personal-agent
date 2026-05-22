@@ -87,9 +87,15 @@ GRAPH_EXTRACT_MODEL = os.getenv("GRAPH_EXTRACT_MODEL", "deepseek-v4-flash")
 
 # MCP (Model Context Protocol) 外部工具服务器
 BAIDU_MAP_API_KEY = os.getenv("BAIDU_MAP_API_KEY", "")
+# MCP linkup网络搜索服务
+LINKUP_SEARCH_API_KEY = os.getenv("LINKUP_SEARCH_API_KEY", "")
 
 # 意图识别
 INTENT_MODEL = os.getenv("INTENT_MODEL", "tongyi-intent-detect-v3")
+
+# 新闻简报定时任务
+NEWS_CRON_HOUR = int(os.getenv("NEWS_CRON_HOUR", "8"))
+NEWS_CRON_MINUTE = int(os.getenv("NEWS_CRON_MINUTE", "0"))
 
 # 文件上传
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))

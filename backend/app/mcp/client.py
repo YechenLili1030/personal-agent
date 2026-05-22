@@ -23,8 +23,15 @@ def build_mcp_servers_config() -> dict:
             "env": {"BAIDU_MAP_API_KEY": BAIDU_MAP_API_KEY},
         }
         logger.info("已配置 MCP Server: baidu-map")
-    else:
-        logger.debug("BAIDU_MAP_API_KEY 未设置，跳过 baidu-map MCP Server")
+
+    from ..core.config import LINKUP_SEARCH_API_KEY
+    if LINKUP_SEARCH_API_KEY:
+        servers["linkup"] = {
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "linkup-mcp-server", f"apiKey={LINKUP_SEARCH_API_KEY}"],
+        }
+        logger.info("已配置 MCP Server: linkup (web search)")
 
     return servers
 

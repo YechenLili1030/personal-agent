@@ -110,4 +110,25 @@ export function createChatWebSocket(sessionId) {
   return new WebSocket(`${protocol}//${host}/api/chat/ws/${sessionId}?token=${token}`)
 }
 
+// 新闻简报
+export function getNewsKeywords() {
+  return api.get('/news/keywords')
+}
+
+export function updateNewsKeywords(keywords) {
+  return api.put('/news/keywords', { keywords })
+}
+
+export function getBriefingList() {
+  return api.get('/news/briefings')
+}
+
+export function getBriefingByDate(date) {
+  return api.get(`/news/briefing/${date}`)
+}
+
+export function generateBriefing(date) {
+  return api.post('/news/generate', { date })
+}
+
 export default api

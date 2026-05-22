@@ -27,6 +27,12 @@ const routes = [
         component: () => import('../views/Knowledge.vue'),
         meta: { title: '知识库' }
       },
+      {
+        path: 'briefing',
+        name: 'Briefing',
+        component: () => import('../views/Briefing.vue'),
+        meta: { title: '每日简报' }
+      },
     ]
   },
 ]

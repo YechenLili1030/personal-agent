@@ -17,6 +17,7 @@ class UserInfo(BaseModel):
     username: str
     nickname: str | None = None
     avatar: str | None = None
+    news_keywords: list[str] | None = None
 
     class Config:
         from_attributes = True

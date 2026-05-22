@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections import defaultdict
 from typing import AsyncGenerator
 from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession

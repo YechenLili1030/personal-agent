@@ -18,6 +18,7 @@ class User(Base):
     nickname: Mapped[str | None] = mapped_column(String(128), default=None)
     avatar: Mapped[str | None] = mapped_column(String(512), default=None)
     preferences: Mapped[dict | None] = mapped_column(JSON, default=None)
+    news_keywords: Mapped[list | None] = mapped_column(JSON, default=None)
     status: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

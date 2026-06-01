@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+backend/.venv/
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Environment (use docker-compose env vars instead)
+.env
+.env.local
+
+# Data (mounted as volumes)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+frontend/dist/
+
+# Docs
+*.md
+!CLAUDE.md
+
+# Misc
+=5.0

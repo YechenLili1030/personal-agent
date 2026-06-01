@@ -80,6 +80,7 @@ RAG_FUSION_ENABLED = os.getenv("RAG_FUSION_ENABLED", "true").lower() != "false"
 RAG_RERANKER_ENABLED = os.getenv("RAG_RERANKER_ENABLED", "true").lower() != "false"
 
 # Neo4j 知识图谱
+GRAPH_ENABLED = os.getenv("GRAPH_ENABLED", "true").lower() != "false"
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
@@ -96,6 +97,9 @@ INTENT_MODEL = os.getenv("INTENT_MODEL", "tongyi-intent-detect-v3")
 # 新闻简报定时任务
 NEWS_CRON_HOUR = int(os.getenv("NEWS_CRON_HOUR", "8"))
 NEWS_CRON_MINUTE = int(os.getenv("NEWS_CRON_MINUTE", "0"))
+
+# CORS
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 
 # 文件上传
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))

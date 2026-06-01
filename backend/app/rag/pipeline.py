@@ -1,45 +1,34 @@
-"""RAG 检索流水线 — 可插拔组件的编排器
+"""Configurable RAG retrieval pipeline.
 
-使用示例:
-    pipeline = RetrievalPipeline(
-        rewriter=DeepSeekQueryRewriter(),
-        retrievers=[DenseRetriever(), SparseRetriever()],
-        fusion=RRFFusion(k=60),
-        reranker=BailianReranker(),
-    )
-    results = await pipeline.run(query="...", history=[...], user_id="...")
+Flow:
+    query -> optional rewrite -> parallel retrievers -> fusion -> optional rerank
 """
 
 from __future__ import annotations
+
+import asyncio
 import logging
 import time
 
 from .base import SearchResult
-from ..core.config import (
-    DENSE_RECALL_K, SPARSE_RECALL_K,
-    RAG_TOP_K, RERANK_TOP_K,
-)
+from ..core.config import DENSE_RECALL_K, RAG_TOP_K, RERANK_TOP_K, SPARSE_RECALL_K
 
 logger = logging.getLogger(__name__)
 
 
 class RetrievalPipeline:
-    """可配置的 RAG 检索流水线
-
-    ── 流程 ──
-    query → [rewriter] → retrievers → fusion → [reranker] → results
-    """
-
-    def __init__(self, *,
-                 rewriter=None,
-                 retrievers: list | None = None,
-                 fusion=None,
-                 reranker=None,
-                 dense_recall_k: int = DENSE_RECALL_K,
-                 sparse_recall_k: int = SPARSE_RECALL_K,
-                 fusion_top_k: int = RAG_TOP_K,
-                 rerank_top_k: int = RERANK_TOP_K,
-                 ):
+    def __init__(
+        self,
+        *,
+        rewriter=None,
+        retrievers: list | None = None,
+        fusion=None,
+        reranker=None,
+        dense_recall_k: int = DENSE_RECALL_K,
+        sparse_recall_k: int = SPARSE_RECALL_K,
+        fusion_top_k: int = RAG_TOP_K,
+        rerank_top_k: int = RERANK_TOP_K,
+    ):
         self.rewriter = rewriter
         self.retrievers = retrievers or []
         self.fusion = fusion
@@ -49,76 +38,120 @@ class RetrievalPipeline:
         self.fusion_top_k = fusion_top_k
         self.rerank_top_k = rerank_top_k
 
-    async def run(self, *, query: str, history: list[dict] | None = None,
-                  user_id: str = "") -> list[SearchResult]:
-        """执行完整检索流水线，返回最终结果列表"""
-        results = []
-        t0 = time.time()
-
-        # ━━━ 1. 查询改写 ━━━
+    async def run(
+        self,
+        *,
+        query: str,
+        history: list[dict] | None = None,
+        user_id: str = "",
+    ) -> list[SearchResult]:
+        started_at = time.time()
         search_query = query
+
         if self.rewriter:
             search_query = await self.rewriter.rewrite(query, history)
 
-        # ━━━ 2. 多路检索 ━━━
         if not self.retrievers:
-            return results
+            return []
 
-        recall_lists: list[list[SearchResult]] = []
-        for retriever in self.retrievers:
-            try:
-                # 稠密检索用更小 recall，稀疏检索用更大 recall
-                top_k = (self.dense_recall_k
-                         if retriever.name == "DenseRetriever"
-                         else self.sparse_recall_k)
-                chunk_list = await retriever.retrieve(
-                    search_query, top_k=top_k, user_id=user_id)
-                recall_lists.append(chunk_list)
-            except Exception as e:
-                logger.warning("%s 检索失败: %s", retriever.name, e)
-
+        recall_lists = await self._retrieve_parallel(search_query, user_id)
         if not recall_lists:
-            return results
+            return []
 
-        # ━━━ 3. 融合 ━━━
-        if self.fusion and len(recall_lists) > 1:
-            results = self.fusion.merge(recall_lists, top_k=self.fusion_top_k)
-        elif len(recall_lists) == 1:
-            results = recall_lists[0][:self.fusion_top_k]
-        else:
-            # 多路无融合: 简单拼接去重取 top
-            seen = set()
-            results = []
-            for rl in recall_lists:
-                for r in rl:
-                    if r.chunk_id not in seen:
-                        seen.add(r.chunk_id)
-                        results.append(r)
-            results = results[:self.fusion_top_k]
+        results = self._merge_results(recall_lists)
+        results = await self._rerank_if_needed(query, results)
 
-        # ━━━ 4. 重排序 ━━━
-        if self.reranker and len(results) > self.rerank_top_k:
-            try:
-                results = await self.reranker.rerank(
-                    query, results, top_k=self.rerank_top_k)
-            except Exception as e:
-                logger.warning("Rerank 失败: %s", e)
-
-        elapsed = (time.time() - t0) * 1000
-        logger.info("流水线完成: %d 条结果 | %.0fms", len(results), elapsed)
+        elapsed = (time.time() - started_at) * 1000
+        logger.info("RAG pipeline done | results=%d | %.0fms", len(results), elapsed)
         return results
 
+    async def _retrieve_parallel(
+        self,
+        query: str,
+        user_id: str,
+    ) -> list[list[SearchResult]]:
+        tasks = [
+            self._retrieve_one(retriever, query, user_id)
+            for retriever in self.retrievers
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-# ── 默认流水线工厂 ──
+        recall_lists: list[list[SearchResult]] = []
+        for retriever, result in zip(self.retrievers, results):
+            if isinstance(result, Exception):
+                logger.warning("%s failed: %s", retriever.name, result)
+                continue
+            if result:
+                recall_lists.append(result)
+
+        return recall_lists
+
+    async def _retrieve_one(
+        self,
+        retriever,
+        query: str,
+        user_id: str,
+    ) -> list[SearchResult]:
+        top_k = self._top_k_for(retriever)
+        started_at = time.time()
+        results = await retriever.retrieve(query, top_k=top_k, user_id=user_id)
+        elapsed = (time.time() - started_at) * 1000
+        logger.info("%s done | results=%d | %.0fms", retriever.name, len(results), elapsed)
+        return results
+
+    def _top_k_for(self, retriever) -> int:
+        if retriever.name == "DenseRetriever":
+            return self.dense_recall_k
+        return self.sparse_recall_k
+
+    def _merge_results(self, recall_lists: list[list[SearchResult]]) -> list[SearchResult]:
+        if self.fusion and len(recall_lists) > 1:
+            return self.fusion.merge(recall_lists, top_k=self.fusion_top_k)
+
+        if len(recall_lists) == 1:
+            return recall_lists[0][:self.fusion_top_k]
+
+        return self._dedupe_without_fusion(recall_lists)
+
+    def _dedupe_without_fusion(
+        self,
+        recall_lists: list[list[SearchResult]],
+    ) -> list[SearchResult]:
+        seen = set()
+        results = []
+        for recall_list in recall_lists:
+            for result in recall_list:
+                if result.chunk_id in seen:
+                    continue
+                seen.add(result.chunk_id)
+                results.append(result)
+        return results[:self.fusion_top_k]
+
+    async def _rerank_if_needed(
+        self,
+        query: str,
+        results: list[SearchResult],
+    ) -> list[SearchResult]:
+        if not self.reranker or len(results) <= self.rerank_top_k:
+            return results
+
+        try:
+            return await self.reranker.rerank(query, results, top_k=self.rerank_top_k)
+        except Exception as exc:
+            logger.warning("Rerank failed: %s", exc)
+            return results
+
 
 _default_pipeline: RetrievalPipeline | None = None
 
 
 def _build_pipeline_from_config() -> RetrievalPipeline:
-    """根据环境变量构建流水线，每个组件可独立开关"""
     from ..core.config import (
-        RAG_REWRITER_ENABLED, RAG_DENSE_ENABLED, RAG_SPARSE_ENABLED,
-        RAG_FUSION_ENABLED, RAG_RERANKER_ENABLED,
+        RAG_DENSE_ENABLED,
+        RAG_FUSION_ENABLED,
+        RAG_RERANKER_ENABLED,
+        RAG_REWRITER_ENABLED,
+        RAG_SPARSE_ENABLED,
     )
 
     rewriter = None
@@ -128,22 +161,27 @@ def _build_pipeline_from_config() -> RetrievalPipeline:
 
     if RAG_REWRITER_ENABLED:
         from .query_rewriter import DeepSeekQueryRewriter
+
         rewriter = DeepSeekQueryRewriter()
 
     if RAG_DENSE_ENABLED:
         from .dense_retriever import DenseRetriever
+
         retrievers.append(DenseRetriever())
 
     if RAG_SPARSE_ENABLED:
         from .sparse_retriever import SparseRetriever
+
         retrievers.append(SparseRetriever())
 
     if RAG_FUSION_ENABLED and len(retrievers) > 1:
         from .rrf_fusion import RRFFusion
+
         fusion = RRFFusion(k=60)
 
     if RAG_RERANKER_ENABLED:
         from .reranker import BailianReranker
+
         reranker = BailianReranker()
 
     pipeline = RetrievalPipeline(
@@ -153,14 +191,14 @@ def _build_pipeline_from_config() -> RetrievalPipeline:
         reranker=reranker,
     )
 
-    parts = []
-    parts.append(f"rewriter={'ON' if rewriter else 'OFF'}")
-    parts.append(f"dense={'ON' if RAG_DENSE_ENABLED else 'OFF'}")
-    parts.append(f"sparse={'ON' if RAG_SPARSE_ENABLED else 'OFF'}")
-    parts.append(f"fusion={'ON' if fusion else 'OFF'}")
-    parts.append(f"reranker={'ON' if reranker else 'OFF'}")
-    logger.info("流水线配置: %s", " | ".join(parts))
-
+    logger.info(
+        "RAG pipeline config | rewriter=%s | dense=%s | sparse=%s | fusion=%s | reranker=%s",
+        "ON" if rewriter else "OFF",
+        "ON" if RAG_DENSE_ENABLED else "OFF",
+        "ON" if RAG_SPARSE_ENABLED else "OFF",
+        "ON" if fusion else "OFF",
+        "ON" if reranker else "OFF",
+    )
     return pipeline
 
 
@@ -172,6 +210,5 @@ def get_pipeline() -> RetrievalPipeline:
 
 
 def set_pipeline(pipeline: RetrievalPipeline | None):
-    """替换全局流水线。传 None 则下次 get_pipeline() 从环境变量重建。"""
     global _default_pipeline
     _default_pipeline = pipeline

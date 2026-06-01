@@ -103,11 +103,54 @@ export function getMessageHistory(sessionId, params = {}) {
   return api.get(`/chat/message/${sessionId}/history`, { params })
 }
 
-export function createChatWebSocket(sessionId) {
+export async function streamChatMessage(sessionId, content, handlers = {}, signal = undefined) {
   const token = localStorage.getItem('token')
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = location.host
-  return new WebSocket(`${protocol}//${host}/api/chat/ws/${sessionId}?token=${token}`)
+  const res = await fetch(`/api/chat/session/${sessionId}/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ content }),
+    signal,
+  })
+
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`
+    try {
+      const data = await res.json()
+      message = data.detail || data.message || message
+    } catch {}
+    throw new Error(message)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const dispatch = (rawEvent) => {
+    const lines = rawEvent.split('\n')
+    let type = 'message'
+    const dataLines = []
+    for (const line of lines) {
+      if (line.startsWith('event:')) type = line.slice(6).trim()
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+    }
+    if (!dataLines.length) return
+    const payload = JSON.parse(dataLines.join('\n'))
+    handlers[type]?.(payload)
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() || ''
+    events.forEach(dispatch)
+  }
+
+  if (buffer.trim()) dispatch(buffer)
 }
 
 // 新闻简报

@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from .core.config import UPLOAD_DIR, CHROMA_PERSIST_DIR, BM25_INDEX_PATH
+from .core.config import UPLOAD_DIR, CHROMA_PERSIST_DIR, BM25_INDEX_PATH, CORS_ORIGINS
 from .core.logging_config import setup_logging
 from .api.auth import router as auth_router
 from .api.knowledge import router as knowledge_router
@@ -126,7 +126,7 @@ app = FastAPI(title="PersonalAgent API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in CORS_ORIGINS.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

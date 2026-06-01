@@ -16,7 +16,7 @@ class DeepSeekQueryRewriter:
     """使用 deepseek-v4-flash 改写查询，禁用 thinking 保证时效"""
 
     def __init__(self, model: str = "deepseek-v4-flash",
-                 history_rounds: int = 3):
+                 history_rounds: int = 5):
         self.model = model
         self.history_rounds = history_rounds
         self._client = OpenAI(

@@ -88,7 +88,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { createSession, getMessageHistory, createChatWebSocket } from '../api/index.js'
+import { createSession, getMessageHistory, streamChatMessage } from '../api/index.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -106,8 +106,8 @@ const inputText = ref('')
 const loading = ref(false)
 const streaming = ref(false)
 const streamText = ref('')
-let ws = null
-const wsReady = ref(false)
+let streamController = null
+const wsReady = ref(true)
 const msgList = ref(null)
 const inputEl = ref(null)
 
@@ -150,32 +150,45 @@ async function switchSession(sid) {
 }
 
 function connectWs(sid) {
-  disconnectWs(); wsReady.value = false
-  try {
-    ws = createChatWebSocket(sid)
-    ws.onopen = () => { wsReady.value = true }
-    ws.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.type === 'token') { streamText.value += data.data; scrollBottom() }
-      else if (data.type === 'title') { currentTitle.value = data.data }
-      else if (data.type === 'done') { finishMessage(data.data?.sources || []); lastIntent.value = data.data?.intent || '' }
-      else if (data.type === 'error') { loading.value = false; streaming.value = false; alert(data.data?.message || '发生错误') }
-    }
-    ws.onclose = () => { wsReady.value = false }
-    ws.onerror = () => { loading.value = false; streaming.value = false; wsReady.value = false }
-  } catch (e) { wsReady.value = false }
+  disconnectWs()
+  wsReady.value = Boolean(sid)
 }
 
-function disconnectWs() { wsReady.value = false; if (ws) { try { ws.close() } catch {}; ws = null } }
+function disconnectWs() {
+  if (streamController) {
+    try { streamController.abort() } catch {}
+    streamController = null
+  }
+}
 
-function handleSend() {
+async function handleSend() {
   if (!wsReady.value) return
   const text = inputText.value.trim()
   if (!text || loading.value) return
   messages.value.push({ role: 'user', content: text })
   streamText.value = ''; streaming.value = true; loading.value = true
   inputText.value = ''; autoResize(); scrollBottom()
-  ws.send(JSON.stringify({ type: 'chat', content: text }))
+  streamController = new AbortController()
+  try {
+    await streamChatMessage(currentSessionId.value, text, {
+      token: (data) => { streamText.value += data; scrollBottom() },
+      title: (data) => { currentTitle.value = data },
+      done: (data) => { finishMessage(data?.sources || []); lastIntent.value = data?.intent || '' },
+      error: (data) => {
+        loading.value = false
+        streaming.value = false
+        alert(data?.message || '发生错误')
+      },
+    }, streamController.signal)
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      loading.value = false
+      streaming.value = false
+      alert(e.message || '发生错误')
+    }
+  } finally {
+    streamController = null
+  }
 }
 
 function finishMessage(sources) {

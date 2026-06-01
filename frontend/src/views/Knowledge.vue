@@ -96,9 +96,9 @@
             </div>
             <div class="doc-actions">
               <span class="status-badge" :class="doc.status">{{ statusLabel(doc.status) }}</span>
-              <span v-if="doc.graph_status === 'built'" class="graph-badge built" title="知识图谱已构建">图谱</span>
-              <span v-else-if="doc.graph_status === 'building'" class="graph-badge building" title="知识图谱构建中">图谱构建中...</span>
-              <span v-else-if="doc.graph_status === 'failed'" class="graph-badge failed" title="知识图谱构建失败">图谱失败</span>
+              <span v-if="graphEnabled && doc.graph_status === 'built'" class="graph-badge built" title="知识图谱已构建">图谱</span>
+              <span v-else-if="graphEnabled && doc.graph_status === 'building'" class="graph-badge building" title="知识图谱构建中">图谱构建中...</span>
+              <span v-else-if="graphEnabled && doc.graph_status === 'failed'" class="graph-badge failed" title="知识图谱构建失败">图谱失败</span>
 
               <button
                 v-if="doc.status === 'inspecting'"
@@ -115,14 +115,14 @@
                 查看分块
               </button>
               <button
-                v-if="doc.graph_status === 'built'"
+                v-if="graphEnabled && doc.graph_status === 'built'"
                 class="view-graph-btn"
                 @click="openGraphViewer(doc)"
               >
                 查看图谱
               </button>
               <button
-                v-if="doc.status === 'done' && doc.graph_status !== 'building' && doc.graph_status !== 'built'"
+                v-if="graphEnabled && doc.status === 'done' && doc.graph_status !== 'building' && doc.graph_status !== 'built'"
                 class="graph-build-btn"
                 :disabled="graphBuilding[doc.doc_id]"
                 @click="handleBuildGraph(doc)"
@@ -130,7 +130,7 @@
                 {{ graphBuilding[doc.doc_id] ? '构建中...' : '构建图谱' }}
               </button>
               <button
-                v-if="doc.graph_status === 'built'"
+                v-if="graphEnabled && doc.graph_status === 'built'"
                 class="graph-del-btn"
                 @click="handleDeleteGraph(doc)"
                 title="删除知识图谱"
@@ -206,6 +206,8 @@ import ChunkInspectorModal from '../components/ChunkInspectorModal.vue'
 import ChunkViewerModal from '../components/ChunkViewerModal.vue'
 import GraphViewerModal from '../components/GraphViewerModal.vue'
 import { getKnowledgeList, uploadKnowledge, deleteKnowledge, buildKnowledgeGraph, deleteKnowledgeGraph } from '../api/index.js'
+
+const graphEnabled = false
 
 const fileInput = ref(null)
 

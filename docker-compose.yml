@@ -1,0 +1,101 @@
+services:
+  # ===== MySQL 8.0 =====
+  mysql:
+    image: mysql:8.0
+    container_name: pa-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-your_db_password}
+      MYSQL_DATABASE: ${DB_NAME:-personal_agent}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-your_db_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pa-network
+
+  # ===== Redis 7 =====
+  redis:
+    image: redis:7-alpine
+    container_name: pa-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pa-network
+
+  # ===== Neo4j 知识图谱 (如不需要可注释掉) =====
+  neo4j:
+    image: neo4j:5-community
+    container_name: pa-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-your_neo4j_password}
+    ports:
+      - "7474:7474"   # HTTP
+      - "7687:7687"   # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-your_neo4j_password}", "RETURN 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - pa-network
+
+  # ===== FastAPI 后端 =====
+  backend:
+    build: ./backend
+    container_name: pa-backend
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pa-network
+
+  # ===== 前端 (nginx + Vue SPA) =====
+  frontend:
+    build: ./frontend
+    container_name: pa-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - pa-network
+
+volumes:
+  mysql_data:
+  redis_data:
+  neo4j_data:
+  neo4j_logs:
+  backend_data:
+
+networks:
+  pa-network:
+    driver: bridge

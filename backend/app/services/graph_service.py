@@ -41,6 +41,12 @@ async def build_graph_from_doc(db: AsyncSession, doc_id: str, user_id: str):
     from ..models.knowledge import DocChunk, KnowledgeDoc
 
     try:
+        doc = (await db.execute(
+            sa_select(KnowledgeDoc).where(KnowledgeDoc.id == doc_id, KnowledgeDoc.user_id == user_id)
+        )).scalar_one_or_none()
+        if not doc:
+            raise ValueError("文档不存在")
+
         # 1. 读取文档所有 chunks
         rows = (await db.execute(
             sa_select(DocChunk.content)
@@ -70,17 +76,17 @@ async def build_graph_from_doc(db: AsyncSession, doc_id: str, user_id: str):
         _insert_to_neo4j(driver, entities, relations, doc_id, user_id)
 
         # 4. 标记完成
-        doc = await db.get(KnowledgeDoc, doc_id)
-        if doc:
-            doc.graph_status = "built"
-            await db.commit()
+        doc.graph_status = "built"
+        await db.commit()
 
         logger.info("图谱构建完成: doc_id=%s nodes=%d edges=%d", doc_id, len(entities), len(relations))
 
     except Exception as e:
         logger.exception("图谱构建失败 doc_id=%s: %s", doc_id, e)
         from ..models.knowledge import KnowledgeDoc
-        doc = await db.get(KnowledgeDoc, doc_id)
+        doc = (await db.execute(
+            sa_select(KnowledgeDoc).where(KnowledgeDoc.id == doc_id, KnowledgeDoc.user_id == user_id)
+        )).scalar_one_or_none()
         if doc:
             doc.graph_status = "failed"
             await db.commit()
@@ -231,7 +237,7 @@ def query_graph(entity_names: list[str], user_id: str) -> list[dict]:
 
 # ═══════════════════════ 图谱可视化数据 ═══════════════════════
 
-def get_doc_graph(doc_id: str) -> dict:
+def get_doc_graph(doc_id: str, user_id: str) -> dict:
     """获取文档的完整图谱数据（节点 + 边），供前端可视化"""
     try:
         driver = _get_driver()
@@ -243,22 +249,22 @@ def get_doc_graph(doc_id: str) -> dict:
         # 查属于该文档的所有实体
         nodes_result = session.run(
             """
-            MATCH (e:Entity)
+            MATCH (e:Entity {user_id: $user_id})
             WHERE e.doc_id CONTAINS $doc_id
             RETURN DISTINCT e.name AS name, e.type AS type
             """,
-            doc_id=doc_id,
+            doc_id=doc_id, user_id=user_id,
         )
         nodes = [{"name": r["name"], "type": r["type"]} for r in nodes_result]
 
         # 查这些实体之间的关系
         edges_result = session.run(
             """
-            MATCH (e1:Entity)-[r]->(e2:Entity)
+            MATCH (e1:Entity {user_id: $user_id})-[r]->(e2:Entity {user_id: $user_id})
             WHERE e1.doc_id CONTAINS $doc_id AND e2.doc_id CONTAINS $doc_id
             RETURN e1.name AS source, type(r) AS relation, e2.name AS target
             """,
-            doc_id=doc_id,
+            doc_id=doc_id, user_id=user_id,
         )
         edges = [{"source": r["source"], "relation": r["relation"], "target": r["target"]} for r in edges_result]
 
@@ -268,7 +274,7 @@ def get_doc_graph(doc_id: str) -> dict:
 
 # ═══════════════════════ 图谱删除 ═══════════════════════
 
-def delete_doc_graph(doc_id: str):
+def delete_doc_graph(doc_id: str, user_id: str):
     """删除与文档关联的所有实体和关系"""
     try:
         driver = _get_driver()
@@ -280,10 +286,10 @@ def delete_doc_graph(doc_id: str):
         # 删除仅属于该文档的关系（避免误删共享实体）
         session.run(
             """
-            MATCH (e:Entity)
+            MATCH (e:Entity {user_id: $user_id})
             WHERE e.doc_id = $doc_id
             DETACH DELETE e
             """,
-            doc_id=doc_id,
+            doc_id=doc_id, user_id=user_id,
         )
         logger.info("已删除文档 %s 的图谱数据", doc_id)
